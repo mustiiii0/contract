@@ -852,21 +852,28 @@
   color: var(--mid);
   border-top: 1px solid var(--rule);
 }
+
+/* ── QR-kod: fast på vänster kant, centrerad vertikalt ── */
 .footer-qr-wrap {
   position: absolute;
-  left: 15mm;
-  bottom: 8mm;
+  left: 6mm;
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   align-items: center;
   justify-content: center;
   pointer-events: none;
+  z-index: 2;
 }
 
 .footer-qr-wrap img {
   display: block;
-  opacity: 0.8;
+  opacity: 0.75;
+  width: 28px;
+  height: 28px;
 }
 
+/* ── Sidnummer: fast i botten, centrerat ── */
 .footer-page-num {
   position: absolute;
   bottom: 8mm;
