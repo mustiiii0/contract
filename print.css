@@ -74,21 +74,34 @@
     display: none;
   }
 
-  /* Use zoom instead of transform — zoom actually affects layout flow
-     so it won't create phantom blank pages */
   .doc-inner {
     zoom: 0.82;
-    padding: 8mm 25mm 0.7mm; /* top, right, bottom, left */ /* vilken är bottom och vilken är left? svar: 8mm är top, 12mm är right, 6mm är bottom och 6mm är left */
+    padding: 8mm 25mm 0.7mm;
   }
 
   /* ── Compact signatures ── */
-
   .doc-sig-grid.compact {
     grid-template-columns: repeat(4, 1fr) !important;
   }
 
-  /* ── Page number ── */
+  /* ── QR vid print: fast vänster kant, centrerad vertikalt ── */
+  .footer-qr-wrap {
+    position: fixed;
+    left: 4mm;
+    top: 50%;
+    transform: translateY(-50%);
+  }
 
+  /* ── Sidnummer vid print ── */
+  .footer-page-num {
+    position: fixed;
+    bottom: 6mm;
+    left: 0;
+    right: 0;
+    text-align: center;
+  }
+
+  /* ── Page number ── */
   .page-number {
     position: relative;
     bottom: auto;
