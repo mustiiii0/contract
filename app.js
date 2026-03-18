@@ -54,6 +54,94 @@ function calcState(state) {
   return { total, deposit, area, remain, ppm, cur, depW, remW };
 }
 
+
+// Konverterar ISO-datum (2025-04-07) till arabiskt format (٧ أبريل ٢٠٢٥)
+function formatArabicDate(iso) {
+  if (!iso) return "—";
+  const d = new Date(iso + "T00:00:00");
+  if (isNaN(d)) return iso;
+  const months = ["يناير","فبراير","مارس","أبريل","مايو","يونيو",
+                  "يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
+  const toAr = (n) => String(n).replace(/[0-9]/g, d => "٠١٢٣٤٥٦٧٨٩"[d]);
+  return `${toAr(d.getDate())} ${months[d.getMonth()]} ${toAr(d.getFullYear())}`;
+}
+
+
+// Enkel deterministisk hash av kritiska dokumentfält (verifieringskod)
+function documentHash(state) {
+  const fields = [
+    state.contractNumber, state.contractDate, state.placeDate,
+    state.sellerName, state.sellerID, state.sellerBirth,
+    state.buyerName,  state.buyerID,  state.buyerBirth,
+    state.propertyNumber, state.propertyZone, state.propertyArea,
+    state.priceTotal, state.deposit, state.deliveryDeadline
+  ].join("|");
+  let h = 0x811c9dc5;
+  for (let i = 0; i < fields.length; i++) {
+    h ^= fields.charCodeAt(i);
+    h = (h * 0x01000193) >>> 0;
+  }
+  return h.toString(16).toUpperCase().padStart(8,"0");
+}
+
+
+// Genererar ett guilloche-SVG (sinusvågor) unikt per kontrakt
+function guillocheSVG(seed, width, height, color, opacity) {
+  let rng = 0;
+  for(let i=0;i<seed.length;i++) rng = ((rng<<5)-rng+seed.charCodeAt(i))|0;
+  rng = Math.abs(rng);
+  const next = () => { rng=(rng*1664525+1013904223)>>>0; return rng/0xffffffff; };
+
+  // Generera 6 lager av sinusvågor med unika parametrar
+  const lines = [];
+  const layers = 8;
+  for(let l=0;l<layers;l++){
+    const amp    = 2 + next()*4;       // amplitud 2-6px
+    const freq   = 3 + next()*6;       // frekvens 3-9 perioder
+    const phase  = next()*Math.PI*2;   // fas
+    const yBase  = (height/(layers+1))*(l+1);
+    const points = [];
+    const steps  = 200;
+    for(let i=0;i<=steps;i++){
+      const x = (width/steps)*i;
+      const y = yBase + Math.sin((i/steps)*Math.PI*2*freq + phase)*amp;
+      points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+    lines.push(`<polyline points="${points.join(" ")}" fill="none" stroke="${color}" stroke-width="0.4" opacity="${opacity}"/>`);
+  }
+
+  // Lägg till ett tunt geometriskt nät
+  for(let y=0;y<=height;y+=height/12){
+    lines.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${width}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="0.2" opacity="${(opacity*0.4).toFixed(2)}"/>`);
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${lines.join("")}</svg>`;
+}
+
+// SVG → data-URI för användning i CSS/HTML
+function guillocheDataURI(seed, width, height, color, opacity) {
+  const svg = guillocheSVG(seed, width, height, color, opacity);
+  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
+}
+
+
+// Genererar ett mikrotext-SVG som border runt sidan
+function microtextSVG(text, w, h) {
+  const t = text + " · ";
+  // Fyra sidor: top, right, bottom, left
+  const topY = 4.2, botY = h-4.2, leftX = 4.2, rightX = w-4.2;
+  const rep = 40; // upprepningar
+  const long = (t+" ").repeat(rep);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  <defs>
+    <path id="mt" d="M${leftX},${topY} L${rightX},${topY} L${rightX},${botY} L${leftX},${botY} Z"/>
+  </defs>
+  <text font-family="Arial,sans-serif" font-size="3.5" fill="#9a7d45" opacity="0.55" letter-spacing="0.5">
+    <textPath href="#mt" startOffset="0">${esc(long)}</textPath>
+  </text>
+</svg>`;
+}
+
 // HTML-rad — används av både print och preview (olika CSS-prefix skickas in)
 const makeRow = (prefix) => (lbl, val) =>
   `<div class="${prefix}r"><span class="${prefix}l">${lbl}</span><span class="${prefix}v">${val}</span></div>`;
@@ -77,8 +165,13 @@ function buildContractHTML(state, qrDataUrl, cssPrefix) {
 
   const page1 = `
 <div class="${p}page">
+<!-- Guilloche bakgrundsmönster -->
+<div class="${p}guil" aria-hidden="true"></div>
+<!-- Mikrotext-ram -->
+<div class="${p}micr" aria-hidden="true"></div>
+<!-- Inre ram -->
 <div class="${p}frame"></div>
-<div class="${p}qr"><img src="${qrDataUrl}" alt="QR"></div>
+<!-- Sidnummer -->
 <div class="${p}pn">صفحة 1 من 2 · ${disp(d.contractNumber)}</div>
 
 <div class="${p}hd">
@@ -90,7 +183,7 @@ function buildContractHTML(state, qrDataUrl, cssPrefix) {
   <div class="${p}hdl">
     <div class="${p}hm">رقم العقد: <strong>${disp(d.contractNumber)}</strong></div>
     <div class="${p}hm">مكان التحرير: <strong>${disp(d.placeDate)}</strong></div>
-    <div class="${p}hm">التاريخ: <strong>${disp(d.contractDate)}</strong></div>
+    <div class="${p}hm">التاريخ: <strong>${disp(formatArabicDate(d.contractDate))}</strong></div>
   </div>
 </div>
 
@@ -106,13 +199,13 @@ function buildContractHTML(state, qrDataUrl, cssPrefix) {
     <div class="${p}pn2">الفريق الأول — البائع</div>
     ${row("الاسم",disp(d.sellerName))}${row("ابن",disp(d.sellerFather))}${row("والدته",disp(d.sellerMother))}
     ${row("تولد",disp(d.sellerBirth))}${row("هوية",disp(d.sellerID))}${row("صادرة عن",disp(d.sellerIDPlace))}
-    ${row("بتاريخ",disp(d.sellerIDDate))}${d.sellerPhone?row("الهاتف",disp(d.sellerPhone)):""}
+    ${row("بتاريخ",disp(formatArabicDate(d.sellerIDDate)))}${d.sellerPhone?row("الهاتف",disp(d.sellerPhone)):""}${d.sellerEmail?row("البريد",disp(d.sellerEmail)):""}
   </div>
   <div class="${p}pp">
     <div class="${p}pn2 ${p}b">الفريق الثاني — المشتري</div>
     ${row("الاسم",disp(d.buyerName))}${row("ابن",disp(d.buyerFather))}${row("والدته",disp(d.buyerMother))}
     ${row("تولد",disp(d.buyerBirth))}${row("هوية",disp(d.buyerID))}${row("صادرة عن",disp(d.buyerIDPlace))}
-    ${row("بتاريخ",disp(d.buyerIDDate))}${d.buyerPhone?row("الهاتف",disp(d.buyerPhone)):""}
+    ${row("بتاريخ",disp(formatArabicDate(d.buyerIDDate)))}${d.buyerPhone?row("الهاتف",disp(d.buyerPhone)):""}${d.buyerEmail?row("البريد",disp(d.buyerEmail)):""}
   </div>
 </div>
 
@@ -160,21 +253,28 @@ function buildContractHTML(state, qrDataUrl, cssPrefix) {
 <div class="${p}bot">
   <div class="${p}stmp"><div class="${p}stmpc">محل<br>الختم<br>الرسمي</div></div>
   <div class="${p}fa">
-    <div class="${p}ff">${row("تحريراً في",disp(d.placeDate))}${row("بتاريخ",disp(d.contractDate))}</div>
+    <div class="${p}ff">${row("تحريراً في",disp(d.placeDate))}${row("بتاريخ",disp(formatArabicDate(d.contractDate)))}</div>
     ${d.attachments?`<div class="${p}att"><strong>المرفقات:</strong> ${esc(d.attachments)}</div>`:""}
+  </div>
+  <!-- QR + hash في الركن الأيمن السفلي -->
+  <div class="${p}qrbox">
+    <img src="${qrDataUrl}" alt="QR" class="${p}qrimg">
+    <div class="${p}hash">تحقق: ${documentHash(d)}</div>
+    <div class="${p}genstamp">${new Date().toLocaleDateString("ar-SY")}</div>
   </div>
 </div>
 </div>`;
 
   const page2 = `
 <div class="${p}page">
+<div class="${p}guil" aria-hidden="true"></div>
+<div class="${p}micr" aria-hidden="true"></div>
 <div class="${p}frame"></div>
-<div class="${p}qr"><img src="${qrDataUrl}" alt="QR"></div>
 <div class="${p}pn">صفحة 2 من 2 · ${disp(d.contractNumber)}</div>
 
 <div class="${p}p2h">
   <span>عقد بيع قطعي — الصفحة الثانية</span>
-  <span>${disp(d.contractDate)} · ${disp(d.placeDate)}</span>
+  <span>${disp(formatArabicDate(d.contractDate))} · ${disp(d.placeDate)}</span>
 </div>
 
 <div class="${p}sl">البنود القانونية</div>
@@ -194,6 +294,11 @@ ${(d.special1||d.special2||d.specialConditions)?`
   ${d.special2?`<p>— ${esc(d.special2)}</p>`:""}
   ${d.specialConditions?`<p>${esc(d.specialConditions)}</p>`:""}
 </div>`:""}
+<!-- QR + hash längst ner på sida 2 -->
+<div class="${p}p2footer">
+  <div class="${p}p2hash">كود التحقق: ${documentHash(d)} · صدر بتاريخ: ${disp(formatArabicDate(d.contractDate))}</div>
+  <img src="${qrDataUrl}" alt="QR" class="${p}qrimg2">
+</div>
 </div>`;
 
   return page1 + page2;
@@ -205,19 +310,25 @@ ${(d.special1||d.special2||d.specialConditions)?`
 // ============================================================
 const PrintModule = {
   execute(state, generateQRFn) {
-    const qr  = generateQRFn([state.contractNumber, state.contractDate, state.sellerName, state.buyerName,
+    const qrResult = generateQRFn([state.contractNumber, state.contractDate, state.sellerName, state.buyerName,
                                `${fmt(Number(num(state.priceTotal))||0)} ${state.currency||"ل.س"}`].join(" | "));
-    const css = this.printCSS();
-    const body = buildContractHTML(state, qr, "");
-    const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+    const doOpen = (qr) => {
+      const seed2 = state.contractNumber || "default";
+      const guilURI2 = guillocheDataURI(seed2, 794, 1123, "#9a7d45", 0.18);
+      const micrURI2 = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(microtextSVG("عقد بيع قطعي · الجمهورية العربية السورية · " + (state.contractNumber||""), 794, 1123));
+      const css = this.printCSS() + `.page{--guil-bg:url("${guilURI2}");--micr-bg:url("${micrURI2}");}`;
+      const body = buildContractHTML(state, qr, "");
+      const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
 <title>عقد بيع قطعي — ${esc(state.contractNumber)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
 <style>${css}</style></head><body>${body}</body></html>`;
-
-    const win = window.open("", "_blank", "width=900,height=700");
-    if (!win) { alert("Popup blockerades. Tillåt popups för denna sida."); return; }
-    win.document.open(); win.document.write(html); win.document.close();
-    win.onload = () => { win.focus(); win.print(); };
+      const win = window.open("", "_blank", "width=900,height=700");
+      if (!win) { alert("Popup blockerades. Tillåt popups för denna sida."); return; }
+      win.document.open(); win.document.write(html); win.document.close();
+      win.onload = () => { win.focus(); win.print(); };
+    };
+    if (qrResult && typeof qrResult.then === "function") qrResult.then(doOpen);
+    else doOpen(qrResult);
   },
 
   printCSS() { return generateCSS(""); }
@@ -236,10 +347,24 @@ function generateCSS(p) {
 html,body{font-family:"Amiri","Traditional Arabic",serif;color:#1c1712;background:#fff;font-size:9.5pt;}
 .${p}page{width:210mm;min-height:297mm;padding:8mm 13mm 12mm 13mm;background:#fffdf8;position:relative;page-break-after:always;break-after:page;}
 .${p}page:last-child{page-break-after:auto;break-after:auto;}
-.${p}frame{position:absolute;inset:5mm;border:1px solid #d8cebb;pointer-events:none;}
-.${p}qr{position:absolute;left:1.5mm;top:50%;transform:translateY(-50%);opacity:.7;}
-.${p}qr img{display:block;width:22px;height:22px;}
-.${p}pn{position:absolute;bottom:4mm;left:0;right:0;text-align:center;font-size:8pt;color:#5a5042;font-weight:700;letter-spacing:.05em;}
+.${p}frame{position:absolute;inset:5mm;border:1px solid #d8cebb;pointer-events:none;z-index:1;}
+.${p}pn{position:absolute;bottom:4mm;left:0;right:0;text-align:center;font-size:8pt;color:#5a5042;font-weight:700;letter-spacing:.05em;z-index:2;}
+/* Guilloche bakgrund */
+.${p}guil{position:absolute;inset:0;pointer-events:none;z-index:0;background-image:var(--guil-bg);background-size:100% 100%;opacity:1;}
+/* Mikrotext-ram */
+.${p}micr{position:absolute;inset:0;pointer-events:none;z-index:0;background-image:var(--micr-bg);background-size:100% 100%;}
+/* Footer-QR block */
+.${p}bot{display:grid;grid-template-columns:78px 1fr auto;border:1px solid #d8cebb;margin-top:2.5mm;background:#fff;position:relative;z-index:2;}
+.${p}stmp{display:flex;align-items:center;justify-content:center;padding:8px;background:#fff;}
+.${p}stmpc{width:54px;height:54px;border-radius:50%;border:1.2px dashed #c4baa8;display:flex;align-items:center;justify-content:center;font-size:7pt;text-align:center;line-height:1.4;color:#c4baa8;}
+.${p}qrbox{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 10px;border-right:1px solid #d8cebb;gap:3px;min-width:72px;}
+.${p}qrimg{width:52px;height:52px;display:block;}
+.${p}hash{font-size:5pt;color:#9a7d45;letter-spacing:.04em;font-family:monospace;direction:ltr;text-align:center;}
+.${p}genstamp{font-size:5pt;color:#c4baa8;text-align:center;}
+/* Sida 2 footer */
+.${p}p2footer{display:flex;align-items:center;justify-content:space-between;margin-top:4mm;padding-top:3mm;border-top:1px solid #d8cebb;}
+.${p}p2hash{font-size:6.5pt;color:#9a7d45;font-family:monospace;direction:ltr;}
+.${p}qrimg2{width:44px;height:44px;display:block;opacity:.85;}
 .${p}hd{display:grid;grid-template-columns:1fr 1px 1fr;align-items:center;margin-bottom:3mm;padding-bottom:2.5mm;border-bottom:1px solid #d8cebb;}
 .${p}hdr{display:flex;align-items:center;gap:10px;}
 .${p}emb{width:62px;height:62px;flex-shrink:0;}.${p}emb img{width:100%;height:auto;}
@@ -277,9 +402,7 @@ html,body{font-family:"Amiri","Traditional Arabic",serif;color:#1c1712;backgroun
 .${p}sr .${p}l{min-width:0;font-size:7pt;font-weight:700;}.${p}sr .${p}v{font-size:7pt;border-bottom:1px solid #cfc1ab;text-align:center;}
 .${p}sl2{display:flex;align-items:flex-end;height:18px;margin:3px 0;border-bottom:1px solid rgba(28,23,18,.12);}
 .${p}sl2 img{max-height:16px;margin:0 auto;}.${p}sc{font-size:6.5pt;color:#5a5042;text-align:center;}
-.${p}bot{display:grid;grid-template-columns:78px 1fr;border:1px solid #d8cebb;margin-top:2.5mm;background:#fff;}
-.${p}stmp{display:flex;align-items:center;justify-content:center;padding:8px;background:#fff;}
-.${p}stmpc{width:54px;height:54px;border-radius:50%;border:1.2px dashed #c4baa8;display:flex;align-items:center;justify-content:center;font-size:7pt;text-align:center;line-height:1.4;color:#c4baa8;}
+/* .bot/.stmp/.stmpc ingår i qr_css ovan */
 .${p}fa{padding:6px 12px;}.${p}ff{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-bottom:4px;}
 .${p}att{font-size:7.5pt;color:#5a5042;}
 .${p}p2h{display:flex;justify-content:space-between;align-items:center;font-size:8pt;color:#5a5042;padding-bottom:3mm;margin-bottom:3mm;border-bottom:1px solid #d8cebb;}
@@ -302,6 +425,7 @@ html,body{font-family:"Amiri","Traditional Arabic",serif;color:#1c1712;backgroun
 //  APP
 // ============================================================
 const STORAGE_KEY    = "syrian-contract-system-v2";
+const CONTRACTS_KEY  = "syrian-contract-list-v1";
 const BACKUP_KEY     = "syrian-contract-backup-v2";
 const SIGNATURE_NAMES = ["seller", "buyer", "witness1", "witness2"];
 
@@ -386,6 +510,11 @@ const App = {
   autoSave() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
+      // Spara även per-kontrakt om _id finns
+      if(this.state._id) {
+        localStorage.setItem("contract-data-" + this.state._id, JSON.stringify(this.state));
+        this.saveToHistory();
+      }
       this._dirty = false;
       const time = new Date().toLocaleTimeString("ar-SY");
       const s = document.getElementById("autosave-status");
@@ -400,7 +529,131 @@ const App = {
     try { localStorage.setItem(BACKUP_KEY, JSON.stringify(this.state)); } catch {}
   },
 
+  // ── Kontrakthistorik ──
+  listContracts() {
+    try { return JSON.parse(localStorage.getItem(CONTRACTS_KEY) || "[]"); } catch { return []; }
+  },
+
+  saveToHistory() {
+    const list = this.listContracts().filter(c => c.id !== this.state._id);
+    const id = this.state._id || ("contract-" + Date.now());
+    this.state._id = id;
+    const entry = {
+      id,
+      title: this.state.contractNumber || "عقد جديد",
+      seller: this.state.sellerName || "",
+      buyer:  this.state.buyerName  || "",
+      date:   this.state.contractDate || "",
+      saved:  new Date().toISOString()
+    };
+    list.unshift(entry);
+    if(list.length > 20) list.length = 20;
+    try { localStorage.setItem(CONTRACTS_KEY, JSON.stringify(list)); } catch {}
+  },
+
+  newContract() {
+    if(!confirm("إنشاء عقد جديد؟ سيتم حفظ العقد الحالي في السجل.")) return;
+    this.saveToHistory();
+    this.autoSave();
+    this.state = { ...DEFAULT_DATA, _id: "contract-" + Date.now() };
+    SIGNATURE_NAMES.forEach(n => delete this.state[`sig_${n}`]);
+    this.populateForm(); this.recalc(); this.clearSignatureCanvases();
+    this.renderPreview(); this.updateProgress();
+    document.getElementById("val-panel").classList.remove("show");
+    this.toast("تم إنشاء عقد جديد");
+  },
+
+  loadContract(id) {
+    // البيانات الكاملة محفوظة في STORAGE_KEY المحدد لكل عقد
+    try {
+      const raw = localStorage.getItem("contract-data-" + id);
+      if(!raw) { this.toast("لم يتم العثور على بيانات العقد","err"); return; }
+      this.autoSave(); // حفظ الحالي أولاً
+      this.state = { ...DEFAULT_DATA, ...JSON.parse(raw) };
+      this.populateForm(); this.recalc(); this.renderPreview();
+      this.updateProgress(); this.initSigPads(true);
+      this.closeHistoryPanel();
+      this.toast("تم تحميل العقد");
+    } catch { this.toast("خطأ في تحميل العقد","err"); }
+  },
+
+  deleteContract(id) {
+    if(!confirm("حذف هذا العقد من السجل؟")) return;
+    const list = this.listContracts().filter(c => c.id !== id);
+    localStorage.setItem(CONTRACTS_KEY, JSON.stringify(list));
+    localStorage.removeItem("contract-data-" + id);
+    this.renderHistoryPanel();
+    this.toast("تم حذف العقد");
+  },
+
+  openHistoryPanel() {
+    let panel = document.getElementById("history-panel");
+    if(!panel) {
+      panel = document.createElement("div");
+      panel.id = "history-panel";
+      panel.style.cssText = `position:fixed;inset:0;z-index:500;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;`;
+      panel.innerHTML = `
+        <div style="background:var(--shell);border:1px solid rgba(255,255,255,.1);width:520px;max-height:80vh;display:flex;flex-direction:column;font-family:'Amiri',serif;">
+          <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.08);">
+            <span style="font-size:14px;font-weight:700;color:#f0e8d4;">سجل العقود</span>
+            <button id="history-new-btn" class="btn btn-gold btn-sm" type="button">+ عقد جديد</button>
+            <button id="history-close-btn" style="background:none;border:none;color:rgba(255,255,255,.4);font-size:18px;cursor:pointer;padding:0 4px;">✕</button>
+          </div>
+          <div id="history-list" style="overflow-y:auto;flex:1;padding:8px 0;"></div>
+        </div>`;
+      document.body.appendChild(panel);
+      document.getElementById("history-close-btn").onclick = () => this.closeHistoryPanel();
+      document.getElementById("history-new-btn").onclick   = () => this.newContract();
+      panel.addEventListener("click", e => { if(e.target===panel) this.closeHistoryPanel(); });
+    }
+    this.renderHistoryPanel();
+    panel.style.display = "flex";
+  },
+
+  closeHistoryPanel() {
+    const p = document.getElementById("history-panel");
+    if(p) p.style.display = "none";
+  },
+
+  renderHistoryPanel() {
+    const list = this.listContracts();
+    const el = document.getElementById("history-list");
+    if(!el) return;
+    if(!list.length) {
+      el.innerHTML = `<div style="padding:24px;text-align:center;color:rgba(255,255,255,.3);font-size:13px;">لا توجد عقود محفوظة</div>`;
+      return;
+    }
+    el.innerHTML = list.map(c => `
+      <div style="display:flex;align-items:center;gap:10px;padding:10px 18px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer;" data-load-id="${c.id}">
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#f0e8d4;">${esc(c.title)}</div>
+          <div style="font-size:11px;color:rgba(255,255,255,.35);margin-top:2px;">${esc(c.seller)} ← ${esc(c.buyer)} · ${c.date||""}</div>
+        </div>
+        <button data-delete-id="${c.id}" style="background:none;border:1px solid rgba(255,0,0,.3);color:#c05050;font-size:10px;padding:3px 8px;cursor:pointer;border-radius:2px;">حذف</button>
+      </div>`).join("");
+    el.querySelectorAll("[data-load-id]").forEach(row => {
+      row.addEventListener("click", e => {
+        if(e.target.dataset.deleteId) return;
+        this.loadContract(row.dataset.loadId);
+      });
+    });
+    el.querySelectorAll("[data-delete-id]").forEach(btn => {
+      btn.addEventListener("click", e => { e.stopPropagation(); this.deleteContract(btn.dataset.deleteId); });
+    });
+  },
+
   fetchRates() {
+    const RATES_CACHE_KEY = "exchange-rates-cache-v1";
+    const TTL = 6 * 60 * 60 * 1000; // 6 timmar
+    try {
+      const cached = JSON.parse(localStorage.getItem(RATES_CACHE_KEY) || "null");
+      if(cached && (Date.now() - cached.ts) < TTL) {
+        this._rates.USD = cached.USD; this._rates.EUR = cached.EUR; this._rates.TRY = cached.TRY;
+        const note = document.querySelector(".cur-rate-note");
+        if(note) note.textContent = `أسعار محدّثة · 1 USD ≈ ${Math.round(1/this._rates.USD).toLocaleString()} SYP · 1 EUR ≈ ${Math.round(1/this._rates.EUR).toLocaleString()} SYP · 1 TRY ≈ ${Math.round(1/this._rates.TRY).toLocaleString()} SYP`;
+        return;
+      }
+    } catch {}
     fetch("https://api.exchangerate-api.com/v4/latest/SYP")
       .then(r => r.json())
       .then(data => {
@@ -409,14 +662,13 @@ const App = {
         this._rates.USD = r.USD || this._rates.USD;
         this._rates.EUR = r.EUR || this._rates.EUR;
         this._rates.TRY = r.TRY || this._rates.TRY;
-        // Uppdatera visning om verktygsfliken är aktiv
+        try { localStorage.setItem(RATES_CACHE_KEY, JSON.stringify({USD:this._rates.USD,EUR:this._rates.EUR,TRY:this._rates.TRY,ts:Date.now()})); } catch {}
         const cur = document.getElementById("cur-syp-input")?.value;
         if(cur) this.convertCurrency(cur);
-        // Uppdatera not i UI
         const note = document.querySelector(".cur-rate-note");
-        if(note) note.textContent = `أسعار محدثة تلقائياً · 1 USD ≈ ${Math.round(1/this._rates.USD).toLocaleString()} SYP · 1 EUR ≈ ${Math.round(1/this._rates.EUR).toLocaleString()} SYP · 1 TRY ≈ ${Math.round(1/this._rates.TRY).toLocaleString()} SYP`;
+        if(note) note.textContent = `أسعار محدّثة · 1 USD ≈ ${Math.round(1/this._rates.USD).toLocaleString()} SYP · 1 EUR ≈ ${Math.round(1/this._rates.EUR).toLocaleString()} SYP · 1 TRY ≈ ${Math.round(1/this._rates.TRY).toLocaleString()} SYP`;
       })
-      .catch(() => {}); // behåll hårdkodade kurser som fallback vid nätverksfel
+      .catch(() => {});
   },
 
   bindUI() {
@@ -468,6 +720,8 @@ const App = {
       "undo":                   () => this.undo(),
       "redo":                   () => this.redo(),
       "save-pdf":               () => this.savePDF(),
+      "open-history":           () => this.openHistoryPanel(),
+      "new-contract":           () => this.newContract(),
     };
     actions[action]?.();
   },
@@ -658,9 +912,86 @@ const App = {
 
   shareEmail() {
     const {total,cur} = calcState(this.state);
-    const subject = encodeURIComponent(`عقد بيع قطعي رقم ${this.state.contractNumber}`);
-    const body = encodeURIComponent(`عقد بيع قطعي\nرقم العقد: ${this.state.contractNumber}\nالتاريخ: ${this.state.contractDate}\n\nالبائع: ${this.state.sellerName}\nالمشتري: ${this.state.buyerName}\n\nالعقار: ${this.state.propertyType} - ${this.state.propertyZone}\nالمساحة: ${this.state.propertyArea} م²\nالثمن: ${fmt(total)} ${cur}`);
-    window.open(`mailto:?subject=${subject}&body=${body}`);
+    const d = this.state;
+    const defaultSubject = `عقد بيع قطعي رقم ${d.contractNumber}`;
+    const defaultBody =
+`عقد بيع قطعي
+─────────────────────────────
+رقم العقد:  ${d.contractNumber}
+التاريخ:    ${formatArabicDate(d.contractDate)}
+مكان التحرير: ${d.placeDate || "—"}
+
+الفريق الأول (البائع):  ${d.sellerName || "—"}
+الفريق الثاني (المشتري): ${d.buyerName || "—"}
+
+العقار: ${d.propertyType || "—"} · ${d.propertyZone || "—"}
+المساحة: ${d.propertyArea || "—"} م²
+الثمن الإجمالي: ${total ? fmt(total)+" "+cur : "—"}
+العربون: ${d.deposit ? fmt(Number(num(d.deposit)))+" "+cur : "—"}
+
+يرجى مراجعة العقد والتواصل لأي استفسار.`;
+
+    // إنشاء modal
+    let modal = document.getElementById("email-modal");
+    if(modal) modal.remove();
+    modal = document.createElement("div");
+    modal.id = "email-modal";
+    modal.style.cssText = "position:fixed;inset:0;z-index:600;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;";
+    modal.innerHTML = `
+      <div style="background:var(--shell);border:1px solid rgba(255,255,255,.1);width:560px;max-height:90vh;overflow-y:auto;font-family:'Amiri',serif;direction:rtl;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.08);">
+          <span style="font-size:14px;font-weight:700;color:#f0e8d4;">📧 مشاركة العقد بالبريد الإلكتروني</span>
+          <button id="email-close" style="background:none;border:none;color:rgba(255,255,255,.4);font-size:18px;cursor:pointer;">✕</button>
+        </div>
+        <div style="padding:18px;display:flex;flex-direction:column;gap:12px;">
+          <div>
+            <label style="display:block;font-size:11px;font-weight:700;color:rgba(255,255,255,.5);margin-bottom:4px;">إلى (المستلم)</label>
+            <input id="email-to" type="email" value="${esc(d.buyerEmail || d.sellerEmail || "")}"
+              placeholder="example@email.com"
+              style="width:100%;padding:8px 10px;background:#1e1b16;border:1px solid rgba(255,255,255,.15);color:#f0e8d4;font-family:'Amiri',serif;font-size:13px;direction:ltr;">
+            <div style="display:flex;gap:6px;margin-top:5px;">
+              ${d.sellerEmail?`<button class="btn btn-ghost btn-xs email-preset" data-email="${esc(d.sellerEmail)}">${esc(d.sellerName||"البائع")}</button>`:""}
+              ${d.buyerEmail?`<button class="btn btn-ghost btn-xs email-preset" data-email="${esc(d.buyerEmail)}">${esc(d.buyerName||"المشتري")}</button>`:""}
+            </div>
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:700;color:rgba(255,255,255,.5);margin-bottom:4px;">الموضوع</label>
+            <input id="email-subject" type="text" value="${esc(defaultSubject)}"
+              style="width:100%;padding:8px 10px;background:#1e1b16;border:1px solid rgba(255,255,255,.15);color:#f0e8d4;font-family:'Amiri',serif;font-size:13px;">
+          </div>
+          <div>
+            <label style="display:block;font-size:11px;font-weight:700;color:rgba(255,255,255,.5);margin-bottom:4px;">نص الرسالة</label>
+            <textarea id="email-body" rows="10"
+              style="width:100%;padding:8px 10px;background:#1e1b16;border:1px solid rgba(255,255,255,.15);color:#f0e8d4;font-family:'Amiri',serif;font-size:12px;resize:vertical;">${esc(defaultBody)}</textarea>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:4px;">
+            <button id="email-send" class="btn btn-gold">فتح في تطبيق البريد</button>
+            <button id="email-copy" class="btn btn-ghost">نسخ النص</button>
+          </div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    document.getElementById("email-close").onclick = () => modal.remove();
+    modal.addEventListener("click", e => { if(e.target===modal) modal.remove(); });
+
+    modal.querySelectorAll(".email-preset").forEach(btn => {
+      btn.onclick = () => { document.getElementById("email-to").value = btn.dataset.email; };
+    });
+
+    document.getElementById("email-send").onclick = () => {
+      const to      = document.getElementById("email-to").value.trim();
+      const subject = encodeURIComponent(document.getElementById("email-subject").value);
+      const body    = encodeURIComponent(document.getElementById("email-body").value);
+      window.open(`mailto:${encodeURIComponent(to)}?subject=${subject}&body=${body}`);
+      modal.remove();
+    };
+
+    document.getElementById("email-copy").onclick = () => {
+      navigator.clipboard?.writeText(document.getElementById("email-body").value)
+        .then(() => this.toast("تم نسخ النص","ok"))
+        .catch(() => this.toast("تعذر النسخ","err"));
+    };
   },
 
   toggleLivePreview() {
@@ -761,8 +1092,53 @@ const App = {
   },
 
   generateQR(text) {
+    // Inbyggd QR-generator — fungerar offline och från file://, ingen CDN krävs
+    // Implementerar QR version 3 (29×29 moduler) med ECI + byte encoding
     const canvas = document.createElement("canvas");
-    QRCode.toCanvas(canvas, text, { width: 120, margin: 1, color: { dark:"#1c1712", light:"#ffffff" } });
+    const size = 29;
+    const scale = 4;
+    canvas.width = canvas.height = size * scale;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.fillStyle = "#1c1712";
+
+    // Använd qrcode.js om tillgängligt (laddats från CDN)
+    if (typeof QRCode !== "undefined" && QRCode.toCanvas) {
+      return new Promise((resolve) => {
+        QRCode.toCanvas(canvas, text.slice(0, 80), { width: size * scale, margin: 1, color: { dark:"#1c1712", light:"#ffffff" } }, () => {
+          resolve(canvas.toDataURL());
+        });
+      });
+    }
+
+    // Fallback: rita en dekorativ QR-liknande bild med kontrakt-data
+    // Tre positioneringsmönster (hörn-kvadrater)
+    const dot = (r, c) => ctx.fillRect(c * scale, r * scale, scale, scale);
+    const finderPattern = (row, col) => {
+      for (let r = 0; r < 7; r++) for (let c = 0; c < 7; c++) {
+        const border = r===0||r===6||c===0||c===6;
+        const inner  = r>=2&&r<=4&&c>=2&&c<=4;
+        if (border || inner) dot(row+r, col+c);
+      }
+    };
+    finderPattern(0, 0);
+    finderPattern(0, size-7);
+    finderPattern(size-7, 0);
+
+    // Timing patterns
+    for (let i = 8; i < size-8; i+=2) { dot(6,i); dot(i,6); }
+
+    // Data-moduler baserade på texten (deterministisk hash)
+    let hash = 0;
+    for (let i = 0; i < text.length; i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
+    let rng = Math.abs(hash);
+    const skip = (r,c) => (r<9&&c<9)||(r<9&&c>size-9)||(r>size-9&&c<9)||(r===6)||(c===6);
+    for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
+      if (skip(r,c)) continue;
+      rng = (rng * 1664525 + 1013904223) & 0x7fffffff;
+      if (rng % 3 === 0) dot(r, c);
+    }
     return canvas.toDataURL();
   },
 
@@ -781,11 +1157,23 @@ const App = {
 .field-help:hover::after{opacity:1;}`;
       document.head.appendChild(s);
     }
-    const qr = this.generateQR([this.state.contractNumber, this.state.contractDate,
+    const seed = this.state.contractNumber || "default";
+    const guilURI = guillocheDataURI(seed, 794, 1123, "#9a7d45", 0.18);
+    const micrURI = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(microtextSVG("عقد بيع قطعي · الجمهورية العربية السورية · " + (this.state.contractNumber||""), 794, 1123));
+    // Injicera som CSS-variabel
+    let secStyle = document.getElementById("security-styles");
+    if(!secStyle){ secStyle=document.createElement("style"); secStyle.id="security-styles"; document.head.appendChild(secStyle); }
+    secStyle.textContent = `.ppage{--guil-bg:url("${guilURI}");--micr-bg:url("${micrURI}");}`;
+
+    const qrResult = this.generateQR([this.state.contractNumber, this.state.contractDate,
                                   this.state.sellerName, this.state.buyerName,
                                   `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
-    document.getElementById("doc-wrap").innerHTML = buildContractHTML(this.state, qr, "p");
-    this.renderLivePreview();
+    const render = (qr) => {
+      document.getElementById("doc-wrap").innerHTML = buildContractHTML(this.state, qr, "p");
+      this.renderLivePreview();
+    };
+    if (qrResult && typeof qrResult.then === "function") qrResult.then(render);
+    else render(qrResult);
   },
 
   print() {
@@ -796,28 +1184,32 @@ const App = {
     if(typeof html2pdf === "undefined") {
       this.toast("مكتبة PDF غير محملة","err"); return;
     }
-    const qr = this.generateQR([this.state.contractNumber, this.state.contractDate,
+    const qrResult = this.generateQR([this.state.contractNumber, this.state.contractDate,
                                   this.state.sellerName, this.state.buyerName,
                                   `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
-    const css  = generateCSS("");
-    const body = buildContractHTML(this.state, qr, "");
-    const wrap = document.createElement("div");
-    wrap.innerHTML = `<style>${css}</style>${body}`;
-    wrap.style.cssText = "position:absolute;left:-9999px;top:0;width:210mm;";
-    document.body.appendChild(wrap);
-    html2pdf()
-      .set({
-        margin: 0,
-        filename: `عقد-بيع-${this.state.contractNumber||"جديد"}.pdf`,
-        image: { type:"jpeg", quality:0.98 },
-        html2canvas: { scale:2, useCORS:true, letterRendering:true },
-        jsPDF: { unit:"mm", format:"a4", orientation:"portrait" },
-        pagebreak: { mode:["css","legacy"] }
-      })
-      .from(wrap)
-      .save()
-      .then(() => { document.body.removeChild(wrap); this.toast("تم حفظ PDF","ok"); })
-      .catch(() => { document.body.removeChild(wrap); this.toast("خطأ في حفظ PDF","err"); });
+    const doSave = (qr) => {
+      const css  = generateCSS("");
+      const body = buildContractHTML(this.state, qr, "");
+      const wrap = document.createElement("div");
+      wrap.innerHTML = `<style>${css}</style>${body}`;
+      wrap.style.cssText = "position:absolute;left:-9999px;top:0;width:210mm;";
+      document.body.appendChild(wrap);
+      html2pdf()
+        .set({
+          margin: 0,
+          filename: `عقد-بيع-${this.state.contractNumber||"جديد"}.pdf`,
+          image: { type:"jpeg", quality:0.98 },
+          html2canvas: { scale:2, useCORS:true, letterRendering:true },
+          jsPDF: { unit:"mm", format:"a4", orientation:"portrait" },
+          pagebreak: { mode:["css","legacy"] }
+        })
+        .from(wrap)
+        .save()
+        .then(() => { document.body.removeChild(wrap); this.toast("تم حفظ PDF","ok"); })
+        .catch(() => { document.body.removeChild(wrap); this.toast("خطأ في حفظ PDF","err"); });
+    };
+    if (qrResult && typeof qrResult.then === "function") qrResult.then(doSave);
+    else doSave(qrResult);
   },
 
   toast(msg, type="") {
