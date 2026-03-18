@@ -9,7 +9,7 @@
   <link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="./base.css">
   <link rel="stylesheet" href="./layout.css">
-  <link rel="stylesheet" href="./print.css" media="print">
+  <!-- print.css borttagen: PrintModule genererar eget fristående popup-dokument -->
 </head>
 <body>
   <div class="shell">
@@ -218,6 +218,9 @@
   </div>
 
   <div class="toast-wrap" id="toast-wrap"></div>
+
+  <!-- QR-kod: qrcode.js från CDN — används av app.js via QRCode.toCanvas() -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="./app.js"></script>
 </body>
 </html>
