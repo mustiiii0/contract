@@ -358,6 +358,8 @@ const App = {
   _sigPads: {}, _livePreviewOn: false,
   _dirty: false,
   _rates: { SYP:1, USD:1/13000, EUR:1/14200, TRY:1/390 },
+  _undoStack: [], _redoStack: [],
+  _UNDO_LIMIT: 20,
 
   init() {
     this.state = this.loadData();
@@ -371,6 +373,7 @@ const App = {
     this._saveTimer   = setInterval(() => { if(this._dirty) this.autoSave(); }, 1000);
     this._backupTimer = setInterval(() => this.backup(), 30000);
     window.addEventListener("beforeunload", () => this.autoSave());
+    this.fetchRates();
   },
 
   loadData() {
@@ -393,7 +396,27 @@ const App = {
   },
 
   backup() {
+    if (!this._dirty) return;
     try { localStorage.setItem(BACKUP_KEY, JSON.stringify(this.state)); } catch {}
+  },
+
+  fetchRates() {
+    fetch("https://api.exchangerate-api.com/v4/latest/SYP")
+      .then(r => r.json())
+      .then(data => {
+        if(!data.rates) return;
+        const r = data.rates;
+        this._rates.USD = r.USD || this._rates.USD;
+        this._rates.EUR = r.EUR || this._rates.EUR;
+        this._rates.TRY = r.TRY || this._rates.TRY;
+        // Uppdatera visning om verktygsfliken är aktiv
+        const cur = document.getElementById("cur-syp-input")?.value;
+        if(cur) this.convertCurrency(cur);
+        // Uppdatera not i UI
+        const note = document.querySelector(".cur-rate-note");
+        if(note) note.textContent = `أسعار محدثة تلقائياً · 1 USD ≈ ${Math.round(1/this._rates.USD).toLocaleString()} SYP · 1 EUR ≈ ${Math.round(1/this._rates.EUR).toLocaleString()} SYP · 1 TRY ≈ ${Math.round(1/this._rates.TRY).toLocaleString()} SYP`;
+      })
+      .catch(() => {}); // behåll hårdkodade kurser som fallback vid nätverksfel
   },
 
   bindUI() {
@@ -401,6 +424,7 @@ const App = {
       el.addEventListener("input", () => {
         clearTimeout(this._debounceTimer);
         this._debounceTimer = setTimeout(() => {
+          this.pushUndo();
           this.state[el.dataset.field] = el.value;
           this._dirty = true;
           this.recalc();
@@ -419,6 +443,16 @@ const App = {
     document.getElementById("import-input").addEventListener("change", (e) => this.handleImport(e.target));
     document.getElementById("cur-syp-input").addEventListener("input", (e) => this.convertCurrency(e.target.value));
     ["cn-prefix","cn-year","cn-seq"].forEach((id) => document.getElementById(id).addEventListener("input", () => this.updateCNPreview()));
+
+    // Tangentbordsgenvägar
+    document.addEventListener("keydown", (e) => {
+      if(e.target.tagName === "TEXTAREA") return; // hindra ej textfält
+      const ctrl = e.ctrlKey || e.metaKey;
+      if(ctrl && e.key === "z" && !e.shiftKey) { e.preventDefault(); this.undo(); }
+      if(ctrl && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); this.redo(); }
+      if(ctrl && e.key === "s") { e.preventDefault(); this.autoSave(); this.toast("تم الحفظ","ok"); }
+      if(ctrl && e.key === "p") { e.preventDefault(); this.print(); }
+    });
   },
 
   handleAction(action) {
@@ -431,8 +465,44 @@ const App = {
       "validate":               () => this.validate(),
       "reset":                  () => this.resetToDefault(),
       "apply-contract-number":  () => this.applyCN(),
+      "undo":                   () => this.undo(),
+      "redo":                   () => this.redo(),
+      "save-pdf":               () => this.savePDF(),
     };
     actions[action]?.();
+  },
+
+  pushUndo() {
+    // Spara en kopia av state (utan interna _-nycklar och signaturer)
+    const snap = Object.fromEntries(
+      Object.entries(this.state).filter(([k]) => !k.startsWith("sig_"))
+    );
+    this._undoStack.push(JSON.stringify(snap));
+    if(this._undoStack.length > this._UNDO_LIMIT) this._undoStack.shift();
+    this._redoStack = [];  // ny ändring raderar redo-historik
+  },
+
+  undo() {
+    if(!this._undoStack.length) { this.toast("لا يوجد شيء للتراجع عنه","err"); return; }
+    // Spara nuläget i redo-stack
+    const snap = Object.fromEntries(
+      Object.entries(this.state).filter(([k]) => !k.startsWith("sig_"))
+    );
+    this._redoStack.push(JSON.stringify(snap));
+    this.state = { ...this.state, ...JSON.parse(this._undoStack.pop()) };
+    this.populateForm(); this.recalc(); this.renderPreview(); this.updateProgress();
+    this.toast("تم التراجع ↩");
+  },
+
+  redo() {
+    if(!this._redoStack.length) { this.toast("لا يوجد شيء للإعادة","err"); return; }
+    const snap = Object.fromEntries(
+      Object.entries(this.state).filter(([k]) => !k.startsWith("sig_"))
+    );
+    this._undoStack.push(JSON.stringify(snap));
+    this.state = { ...this.state, ...JSON.parse(this._redoStack.pop()) };
+    this.populateForm(); this.recalc(); this.renderPreview(); this.updateProgress();
+    this.toast("تم الإعادة ↪");
   },
 
   populateForm() {
@@ -448,15 +518,11 @@ const App = {
     document.getElementById("f-remaining").value    = remain ? `${fmt(remain)} ${cur}` : "";
     document.getElementById("f-pricePerMeter").value = ppm   ? `${fmt(ppm)} ${cur}`   : "";
 
-    // Alltid räkna om arabisk text när belopp ändras
-    if(deposit) {
-      this.state.depositWords  = `${numToArabicWords(deposit)} ${cur}`;
-      document.getElementById("f-depositWords").value = this.state.depositWords;
-    }
-    if(remain) {
-      this.state.remainingWords = `${numToArabicWords(remain)} ${cur}`;
-      document.getElementById("f-remainingWords").value = this.state.remainingWords;
-    }
+    // Alltid räkna om arabisk text — rensa om värdet är 0
+    this.state.depositWords  = deposit ? `${numToArabicWords(deposit)} ${cur}` : "";
+    this.state.remainingWords = remain ? `${numToArabicWords(remain)} ${cur}` : "";
+    document.getElementById("f-depositWords").value  = this.state.depositWords;
+    document.getElementById("f-remainingWords").value = this.state.remainingWords;
   },
 
   updateProgress() {
@@ -538,6 +604,7 @@ const App = {
     if(sourceButton?.classList.contains("tab")) sourceButton.classList.add("active");
     else document.getElementById(`tab-${name}-btn`)?.classList.add("active");
     if(name==="preview") this.renderPreview();
+    if(name==="form") this.initSigPads();
     if(name==="tools"){ const b=num(this.state.priceTotal); if(b){document.getElementById("cur-syp-input").value=b; this.convertCurrency(b);} }
   },
 
@@ -615,10 +682,26 @@ const App = {
   initSigPads(force=false) {
     SIGNATURE_NAMES.forEach((name) => {
       const canvas = document.getElementById(`sig-${name}`);
-      if(!canvas || (this._sigPads[name] && !force)) return;
+      if(!canvas) return;
+
+      // Om canvas ännu inte har en synlig bredd (formulärfliken dold vid init),
+      // registrera en ResizeObserver som kör om när canvas faktiskt visas.
+      const rect = canvas.getBoundingClientRect();
+      if(rect.width === 0 && !force) {
+        const ro = new ResizeObserver((entries, observer) => {
+          if(entries[0].contentRect.width > 0) {
+            observer.disconnect();
+            this.initSigPads(true);
+          }
+        });
+        ro.observe(canvas);
+        return;
+      }
+
+      if(this._sigPads[name] && !force) return;
+
       const ctx = canvas.getContext("2d");
       const dpr = window.devicePixelRatio || 1;
-      const rect = canvas.getBoundingClientRect();
       canvas.width  = Math.max(1, Math.floor(rect.width  * dpr));
       canvas.height = Math.max(1, Math.floor(rect.height * dpr));
       ctx.setTransform(1,0,0,1,0,0); ctx.scale(dpr,dpr);
@@ -631,6 +714,7 @@ const App = {
       canvas.onmousedown=start; canvas.onmousemove=move; canvas.onmouseup=end; canvas.onmouseleave=end;
       canvas.ontouchstart=start; canvas.ontouchmove=move; canvas.ontouchend=end;
       this._sigPads[name]={canvas,ctx};
+      // Återrit alltid sparad signatur (race-condition fix)
       this.redrawSignature(name);
     });
   },
@@ -688,6 +772,15 @@ const App = {
       const s=document.createElement("style"); s.id="preview-styles"; s.textContent=generateCSS("p");
       document.head.appendChild(s);
     }
+    if(!document.getElementById("tooltip-styles")){
+      const s=document.createElement("style"); s.id="tooltip-styles";
+      s.textContent=`
+.field-help{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;margin-right:4px;font-size:9px;color:var(--mid);background:var(--field);border:1px solid var(--faint);border-radius:50%;cursor:help;position:relative;flex-shrink:0;line-height:1;transition:background .15s;}
+.field-help:hover{background:var(--accent);color:#fff;border-color:var(--accent);}
+.field-help::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);right:50%;transform:translateX(50%);width:200px;padding:6px 10px;font-size:11px;line-height:1.5;color:#e8e0d0;background:var(--shell);border:1px solid rgba(255,255,255,.1);border-radius:2px;white-space:normal;text-align:right;pointer-events:none;opacity:0;transition:opacity .15s;z-index:200;}
+.field-help:hover::after{opacity:1;}`;
+      document.head.appendChild(s);
+    }
     const qr = this.generateQR([this.state.contractNumber, this.state.contractDate,
                                   this.state.sellerName, this.state.buyerName,
                                   `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
@@ -697,6 +790,34 @@ const App = {
 
   print() {
     PrintModule.execute(this.state, (text) => this.generateQR(text));
+  },
+
+  savePDF() {
+    if(typeof html2pdf === "undefined") {
+      this.toast("مكتبة PDF غير محملة","err"); return;
+    }
+    const qr = this.generateQR([this.state.contractNumber, this.state.contractDate,
+                                  this.state.sellerName, this.state.buyerName,
+                                  `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
+    const css  = generateCSS("");
+    const body = buildContractHTML(this.state, qr, "");
+    const wrap = document.createElement("div");
+    wrap.innerHTML = `<style>${css}</style>${body}`;
+    wrap.style.cssText = "position:absolute;left:-9999px;top:0;width:210mm;";
+    document.body.appendChild(wrap);
+    html2pdf()
+      .set({
+        margin: 0,
+        filename: `عقد-بيع-${this.state.contractNumber||"جديد"}.pdf`,
+        image: { type:"jpeg", quality:0.98 },
+        html2canvas: { scale:2, useCORS:true, letterRendering:true },
+        jsPDF: { unit:"mm", format:"a4", orientation:"portrait" },
+        pagebreak: { mode:["css","legacy"] }
+      })
+      .from(wrap)
+      .save()
+      .then(() => { document.body.removeChild(wrap); this.toast("تم حفظ PDF","ok"); })
+      .catch(() => { document.body.removeChild(wrap); this.toast("خطأ في حفظ PDF","err"); });
   },
 
   toast(msg, type="") {
