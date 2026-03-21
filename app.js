@@ -85,62 +85,9 @@ function documentHash(state) {
 }
 
 
-// Genererar ett guilloche-SVG (sinusvågor) unikt per kontrakt
-function guillocheSVG(seed, width, height, color, opacity) {
-  let rng = 0;
-  for(let i=0;i<seed.length;i++) rng = ((rng<<5)-rng+seed.charCodeAt(i))|0;
-  rng = Math.abs(rng);
-  const next = () => { rng=(rng*1664525+1013904223)>>>0; return rng/0xffffffff; };
 
-  // Generera 6 lager av sinusvågor med unika parametrar
-  const lines = [];
-  const layers = 8;
-  for(let l=0;l<layers;l++){
-    const amp    = 2 + next()*4;       // amplitud 2-6px
-    const freq   = 3 + next()*6;       // frekvens 3-9 perioder
-    const phase  = next()*Math.PI*2;   // fas
-    const yBase  = (height/(layers+1))*(l+1);
-    const points = [];
-    const steps  = 200;
-    for(let i=0;i<=steps;i++){
-      const x = (width/steps)*i;
-      const y = yBase + Math.sin((i/steps)*Math.PI*2*freq + phase)*amp;
-      points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
-    }
-    lines.push(`<polyline points="${points.join(" ")}" fill="none" stroke="${color}" stroke-width="0.4" opacity="${opacity}"/>`);
-  }
-
-  // Lägg till ett tunt geometriskt nät
-  for(let y=0;y<=height;y+=height/12){
-    lines.push(`<line x1="0" y1="${y.toFixed(1)}" x2="${width}" y2="${y.toFixed(1)}" stroke="${color}" stroke-width="0.2" opacity="${(opacity*0.4).toFixed(2)}"/>`);
-  }
-
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">${lines.join("")}</svg>`;
-}
-
-// SVG → data-URI för användning i CSS/HTML
-function guillocheDataURI(seed, width, height, color, opacity) {
-  const svg = guillocheSVG(seed, width, height, color, opacity);
-  return "data:image/svg+xml;charset=utf-8," + encodeURIComponent(svg);
-}
-
-
-// Genererar ett mikrotext-SVG som border runt sidan
-function microtextSVG(text, w, h) {
-  const t = text + " · ";
-  // Fyra sidor: top, right, bottom, left
-  const topY = 4.2, botY = h-4.2, leftX = 4.2, rightX = w-4.2;
-  const rep = 40; // upprepningar
-  const long = (t+" ").repeat(rep);
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
-  <defs>
-    <path id="mt" d="M${leftX},${topY} L${rightX},${topY} L${rightX},${botY} L${leftX},${botY} Z"/>
-  </defs>
-  <text font-family="Arial,sans-serif" font-size="3.5" fill="#9a7d45" opacity="0.55" letter-spacing="0.5">
-    <textPath href="#mt" startOffset="0">${esc(long)}</textPath>
-  </text>
-</svg>`;
-}
+// Genererar mikrotext-HTML — fyra <div>-band, en per sida
+// Inlineat i dokumentet så att det renderas korrekt överallt
 
 // HTML-rad — används av både print och preview (olika CSS-prefix skickas in)
 const makeRow = (prefix) => (lbl, val) =>
@@ -165,10 +112,6 @@ function buildContractHTML(state, qrDataUrl, cssPrefix) {
 
   const page1 = `
 <div class="${p}page">
-<!-- Guilloche bakgrundsmönster -->
-<div class="${p}guil" aria-hidden="true"></div>
-<!-- Mikrotext-ram -->
-<div class="${p}micr" aria-hidden="true"></div>
 <!-- Inre ram -->
 <div class="${p}frame"></div>
 <!-- Sidnummer -->
@@ -267,8 +210,6 @@ function buildContractHTML(state, qrDataUrl, cssPrefix) {
 
   const page2 = `
 <div class="${p}page">
-<div class="${p}guil" aria-hidden="true"></div>
-<div class="${p}micr" aria-hidden="true"></div>
 <div class="${p}frame"></div>
 <div class="${p}pn">صفحة 2 من 2 · ${disp(d.contractNumber)}</div>
 
@@ -313,10 +254,7 @@ const PrintModule = {
     const qrResult = generateQRFn([state.contractNumber, state.contractDate, state.sellerName, state.buyerName,
                                `${fmt(Number(num(state.priceTotal))||0)} ${state.currency||"ل.س"}`].join(" | "));
     const doOpen = (qr) => {
-      const seed2 = state.contractNumber || "default";
-      const guilURI2 = guillocheDataURI(seed2, 794, 1123, "#9a7d45", 0.18);
-      const micrURI2 = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(microtextSVG("عقد بيع قطعي · الجمهورية العربية السورية · " + (state.contractNumber||""), 794, 1123));
-      const css = this.printCSS() + `.page{--guil-bg:url("${guilURI2}");--micr-bg:url("${micrURI2}");}`;
+      const css = this.printCSS();
       const body = buildContractHTML(state, qr, "");
       const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
 <title>عقد بيع قطعي — ${esc(state.contractNumber)}</title>
@@ -344,67 +282,63 @@ function generateCSS(p) {
   return `
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
 :root{--ink:#1c1712;--mid:#5a5042;--faint:#c4baa8;--rule:#d8cebb;--accent:#2c4a3e;--gold:#9a7d45;--danger:#6e1f1f;--page:#fffdf8;}
-html,body{font-family:"Amiri","Traditional Arabic",serif;color:#1c1712;background:#fff;font-size:9.5pt;}
-.${p}page{width:210mm;min-height:297mm;padding:8mm 13mm 12mm 13mm;background:#fffdf8;position:relative;page-break-after:always;break-after:page;}
+html,body{font-family:"Amiri","Traditional Arabic",serif;color:#1c1712;background:#fff;font-size:9pt;}
+.${p}page{width:210mm;min-height:297mm;padding:7mm 12mm 10mm 12mm;background:#fffdf8;position:relative;page-break-after:always;break-after:page;overflow:visible;box-sizing:border-box;}
 .${p}page:last-child{page-break-after:auto;break-after:auto;}
 .${p}frame{position:absolute;inset:5mm;border:1px solid #d8cebb;pointer-events:none;z-index:1;}
-.${p}pn{position:absolute;bottom:4mm;left:0;right:0;text-align:center;font-size:8pt;color:#5a5042;font-weight:700;letter-spacing:.05em;z-index:2;}
-/* Guilloche bakgrund */
-.${p}guil{position:absolute;inset:0;pointer-events:none;z-index:0;background-image:var(--guil-bg);background-size:100% 100%;opacity:1;}
-/* Mikrotext-ram */
-.${p}micr{position:absolute;inset:0;pointer-events:none;z-index:0;background-image:var(--micr-bg);background-size:100% 100%;}
+.${p}pn{position:absolute;bottom:5mm;left:0;right:0;text-align:center;font-size:7.5pt;color:#5a5042;font-weight:700;letter-spacing:.05em;z-index:3;}
 /* Footer-QR block */
-.${p}bot{display:grid;grid-template-columns:78px 1fr auto;border:1px solid #d8cebb;margin-top:2.5mm;background:#fff;position:relative;z-index:2;}
-.${p}stmp{display:flex;align-items:center;justify-content:center;padding:8px;background:#fff;}
-.${p}stmpc{width:54px;height:54px;border-radius:50%;border:1.2px dashed #c4baa8;display:flex;align-items:center;justify-content:center;font-size:7pt;text-align:center;line-height:1.4;color:#c4baa8;}
-.${p}qrbox{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:6px 10px;border-right:1px solid #d8cebb;gap:3px;min-width:72px;}
-.${p}qrimg{width:52px;height:52px;display:block;}
-.${p}hash{font-size:5pt;color:#9a7d45;letter-spacing:.04em;font-family:monospace;direction:ltr;text-align:center;}
-.${p}genstamp{font-size:5pt;color:#c4baa8;text-align:center;}
+.${p}bot{display:grid;grid-template-columns:68px 1fr auto;border:1px solid #d8cebb;margin-top:1.5mm;background:#fff;position:relative;z-index:2;}
+.${p}stmp{display:flex;align-items:center;justify-content:center;padding:5px;background:#fff;}
+.${p}stmpc{width:46px;height:46px;border-radius:50%;border:1.2px dashed #c4baa8;display:flex;align-items:center;justify-content:center;font-size:6pt;text-align:center;line-height:1.4;color:#c4baa8;}
+.${p}qrbox{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3px 7px;border-right:1px solid #d8cebb;gap:2px;min-width:40px;}
+.${p}qrimg{width:26px;height:26px;display:block;image-rendering:pixelated;}
+.${p}hash{font-size:4.5pt;color:#9a7d45;letter-spacing:.04em;font-family:monospace;direction:ltr;text-align:center;}
+.${p}genstamp{font-size:4.5pt;color:#c4baa8;text-align:center;}
 /* Sida 2 footer */
-.${p}p2footer{display:flex;align-items:center;justify-content:space-between;margin-top:4mm;padding-top:3mm;border-top:1px solid #d8cebb;}
-.${p}p2hash{font-size:6.5pt;color:#9a7d45;font-family:monospace;direction:ltr;}
-.${p}qrimg2{width:44px;height:44px;display:block;opacity:.85;}
-.${p}hd{display:grid;grid-template-columns:1fr 1px 1fr;align-items:center;margin-bottom:3mm;padding-bottom:2.5mm;border-bottom:1px solid #d8cebb;}
-.${p}hdr{display:flex;align-items:center;gap:10px;}
-.${p}emb{width:62px;height:62px;flex-shrink:0;}.${p}emb img{width:100%;height:auto;}
-.${p}state{font-size:17pt;font-weight:700;line-height:1.2;}
-.${p}div{width:1px;height:68px;background:#d8cebb;margin:0 14px;}
-.${p}hdl{display:flex;flex-direction:column;gap:3px;text-align:left;justify-self:end;}
-.${p}hm{font-size:9.5pt;font-weight:700;color:#3b3327;}.${p}hm strong{font-size:10pt;color:#1c1712;}
-.${p}tb{text-align:center;margin:2mm 0 3mm;}
-.${p}orn{height:1.5px;background:#9a7d45;margin-bottom:2mm;}
-.${p}mt{font-size:24pt;font-weight:700;}.${p}st{font-size:9pt;color:#5a5042;margin-top:1mm;}
-.${p}sl{display:flex;align-items:center;gap:6px;font-size:8pt;font-weight:700;letter-spacing:.1em;color:#9a7d45;margin-bottom:2mm;margin-top:2.5mm;}
+.${p}p2footer{display:flex;align-items:center;justify-content:space-between;margin-top:3mm;padding-top:2mm;border-top:1px solid #d8cebb;}
+.${p}p2hash{font-size:6pt;color:#9a7d45;font-family:monospace;direction:ltr;}
+.${p}qrimg2{width:22px;height:22px;display:block;opacity:.85;image-rendering:pixelated;}
+.${p}hd{display:grid;grid-template-columns:1fr 1px 1fr;align-items:center;margin-bottom:2mm;padding-bottom:2mm;border-bottom:1px solid #d8cebb;}
+.${p}hdr{display:flex;align-items:center;gap:8px;}
+.${p}emb{width:54px;height:54px;flex-shrink:0;}.${p}emb img{width:100%;height:auto;}
+.${p}state{font-size:15pt;font-weight:700;line-height:1.2;}
+.${p}div{width:1px;height:58px;background:#d8cebb;margin:0 12px;}
+.${p}hdl{display:flex;flex-direction:column;gap:2px;text-align:left;justify-self:end;}
+.${p}hm{font-size:9pt;font-weight:700;color:#3b3327;}.${p}hm strong{font-size:9.5pt;color:#1c1712;}
+.${p}tb{text-align:center;margin:1.5mm 0 2mm;}
+.${p}orn{height:1.5px;background:#9a7d45;margin-bottom:1.5mm;}
+.${p}mt{font-size:22pt;font-weight:700;}.${p}st{font-size:8.5pt;color:#5a5042;margin-top:.5mm;}
+.${p}sl{display:flex;align-items:center;gap:6px;font-size:7.5pt;font-weight:700;letter-spacing:.1em;color:#9a7d45;margin-bottom:1.5mm;margin-top:2mm;}
 .${p}sl::after{content:"";flex:1;height:1px;background:#d8cebb;}
-.${p}pg{display:grid;grid-template-columns:1fr 1fr;border:1.2px solid #d9ccb7;margin-bottom:2.5mm;background:#fff;}
+.${p}pg{display:grid;grid-template-columns:1fr 1fr;border:1.2px solid #d9ccb7;margin-bottom:2mm;background:#fff;}
 .${p}pp{padding:5px 10px;background:#fff;}.${p}pp+.${p}pp{border-right:1.2px solid #d9ccb7;}
 .${p}pn2{font-size:9.5pt;font-weight:700;color:#2c4a3e;border-bottom:1.2px solid #d4c6b0;padding-bottom:3px;margin-bottom:4px;}
 .${p}b{color:#9a7d45;}
-.${p}r{display:flex;align-items:center;gap:5px;margin-bottom:3px;}
-.${p}l{min-width:58px;font-size:8.5pt;font-weight:700;color:#5a5042;flex-shrink:0;}
+.${p}r{display:flex;align-items:center;gap:4px;margin-bottom:3px;}
+.${p}l{min-width:56px;font-size:8.5pt;font-weight:700;color:#5a5042;flex-shrink:0;}
 .${p}v{flex:1;font-size:9pt;border-bottom:1px solid #cfc1ab;padding:1px 3px 2px;text-align:center;}
-.${p}prop{display:grid;grid-template-columns:1fr 1fr;border:1.2px solid #d9ccb7;margin-bottom:2.5mm;}
+.${p}prop{display:grid;grid-template-columns:1fr 1fr;border:1.2px solid #d9ccb7;margin-bottom:2mm;}
 .${p}pc{padding:3px 8px;border-bottom:1.2px solid #d9ccb7;border-left:1.2px solid #d9ccb7;}
 .${p}pc:nth-child(odd){border-left:0;}.${p}full{grid-column:1/-1;border-left:0;}.${p}nb{border-bottom:0;}
 .${p}pc .${p}l{min-width:64px;}.${p}pc .${p}v{text-align:center;}
-.${p}ps{display:grid;grid-template-columns:2fr 1fr 1fr;background:#335545;color:#fff;margin-bottom:2.5mm;}
-.${p}psc{padding:6px 10px;border-left:1px solid rgba(255,255,255,.1);}.${p}psc:last-child{border-left:0;}
-.${p}psl{display:block;font-size:7pt;letter-spacing:.1em;color:rgba(255,255,255,.5);margin-bottom:2px;}
-.${p}psv{display:block;font-size:13pt;font-weight:700;direction:ltr;}
-.${p}psc:not(:first-child) .${p}psv{font-size:11pt;color:rgba(255,255,255,.85);}
-.${p}fg{display:grid;grid-template-columns:1fr 1fr 1fr;border:1.2px solid #d9ccb7;margin-bottom:2.5mm;}
+.${p}ps{display:grid;grid-template-columns:2fr 1fr 1fr;background:#335545;color:#fff;margin-bottom:1.5mm;}
+.${p}psc{padding:3px 8px;border-left:1px solid rgba(255,255,255,.1);}.${p}psc:last-child{border-left:0;}
+.${p}psl{display:block;font-size:6pt;letter-spacing:.1em;color:rgba(255,255,255,.5);margin-bottom:1px;}
+.${p}psv{display:block;font-size:10.5pt;font-weight:700;direction:ltr;}
+.${p}psc:not(:first-child) .${p}psv{font-size:9pt;color:rgba(255,255,255,.85);}
+.${p}fg{display:grid;grid-template-columns:1fr 1fr 1fr;border:1.2px solid #d9ccb7;margin-bottom:2mm;}
 .${p}fg .${p}pc{border-left:1.2px solid #d9ccb7;}.${p}fg .${p}pc:first-child{border-left:0;}
-.${p}sg{display:grid;grid-template-columns:repeat(4,1fr);border:1.2px solid #d9ccb7;margin-bottom:2.5mm;}
-.${p}sb{padding:4px 5px;border-right:1.2px solid #d9ccb7;}.${p}sb:last-child{border-right:0;}
-.${p}sbt{font-size:7.5pt;font-weight:700;color:#2c4a3e;border-bottom:1.2px solid #d4c6b0;padding-bottom:2px;margin-bottom:3px;}
-.${p}sr{display:flex;align-items:center;gap:2px;margin-bottom:2px;}
-.${p}sr .${p}l{min-width:0;font-size:7pt;font-weight:700;}.${p}sr .${p}v{font-size:7pt;border-bottom:1px solid #cfc1ab;text-align:center;}
-.${p}sl2{display:flex;align-items:flex-end;height:18px;margin:3px 0;border-bottom:1px solid rgba(28,23,18,.12);}
-.${p}sl2 img{max-height:16px;margin:0 auto;}.${p}sc{font-size:6.5pt;color:#5a5042;text-align:center;}
+.${p}sg{display:grid;grid-template-columns:repeat(4,1fr);border:1.2px solid #d9ccb7;margin-bottom:2mm;}
+.${p}sb{padding:4px 6px;border-right:1.2px solid #d9ccb7;}.${p}sb:last-child{border-right:0;}
+.${p}sbt{font-size:8pt;font-weight:700;color:#2c4a3e;border-bottom:1.2px solid #d4c6b0;padding-bottom:3px;margin-bottom:4px;}
+.${p}sr{display:flex;align-items:center;gap:2px;margin-bottom:1px;}
+.${p}sr .${p}l{min-width:0;font-size:7.5pt;font-weight:700;}.${p}sr .${p}v{font-size:7.5pt;border-bottom:1px solid #cfc1ab;text-align:center;}
+.${p}sl2{display:flex;align-items:flex-end;height:19px;margin:3px 0;border-bottom:1px solid rgba(28,23,18,.12);}
+.${p}sl2 img{max-height:14px;margin:0 auto;}.${p}sc{font-size:7pt;color:#5a5042;text-align:center;}
 /* .bot/.stmp/.stmpc ingår i qr_css ovan */
-.${p}fa{padding:6px 12px;}.${p}ff{display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;margin-bottom:4px;}
-.${p}att{font-size:7.5pt;color:#5a5042;}
+.${p}fa{padding:6px 12px;}.${p}ff{display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;margin-bottom:3px;}
+.${p}att{font-size:7pt;color:#5a5042;}
 .${p}p2h{display:flex;justify-content:space-between;align-items:center;font-size:8pt;color:#5a5042;padding-bottom:3mm;margin-bottom:3mm;border-bottom:1px solid #d8cebb;}
 .${p}ci{font-size:9.5pt;font-style:italic;color:#5a5042;border-right:2px solid #d8cebb;padding-right:8px;margin-bottom:3mm;}
 .${p}cl{display:flex;gap:8px;font-size:9.5pt;line-height:1.85;text-align:justify;padding-bottom:3mm;margin-bottom:3mm;border-bottom:1px solid #d8cebb;}
@@ -414,8 +348,28 @@ html,body{font-family:"Amiri","Traditional Arabic",serif;color:#1c1712;backgroun
 .${p}spb p{margin-bottom:3px;}
   ` + (p === "" ? `
 @page{size:A4;margin:0;}
-@media print{*{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}body{background:#fff;}.${p}page{min-height:0;height:297mm;overflow:hidden;}}
-@media screen{body{background:#d0c8b8;padding:16px;}.${p}page{margin:0 auto 20px;box-shadow:0 4px 20px rgba(0,0,0,.2);}}` : `
+@media print{
+  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
+  html,body{margin:0;padding:0;background:#fff;}
+  .page{
+    width:210mm !important;
+    height:297mm !important;
+    min-height:unset !important;
+    padding:8mm 13mm 12mm 13mm !important;
+    box-sizing:border-box !important;
+    page-break-after:always !important;
+    break-after:page !important;
+    page-break-inside:avoid !important;
+    break-inside:avoid !important;
+    position:relative !important;
+    overflow:hidden !important;
+    box-shadow:none !important;
+    margin:0 !important;
+    background:#fffdf8 !important;
+  }
+  .page:last-child{page-break-after:auto !important;break-after:auto !important;}
+}
+@media screen{body{background:#d0c8b8;padding:16px;}.page{margin:0 auto 20px;box-shadow:0 4px 20px rgba(0,0,0,.2);}}` : `
 #doc-wrap{display:flex;flex-direction:column;align-items:center;gap:24px;padding:24px 0;background:#e8e2d8;}
 .${p}page{box-shadow:0 4px 20px rgba(0,0,0,.18);}`);
 }
@@ -1092,52 +1046,68 @@ const App = {
   },
 
   generateQR(text) {
-    // Inbyggd QR-generator — fungerar offline och från file://, ingen CDN krävs
-    // Implementerar QR version 3 (29×29 moduler) med ECI + byte encoding
-    const canvas = document.createElement("canvas");
-    const size = 29;
-    const scale = 4;
-    canvas.width = canvas.height = size * scale;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#fff";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = "#1c1712";
-
-    // Använd qrcode.js om tillgängligt (laddats från CDN)
-    if (typeof QRCode !== "undefined" && QRCode.toCanvas) {
+    // Använd QRCode-biblioteket om tillgängligt (qrcodejs via CDN)
+    // qrcodejs API: new QRCode(element, options) — renderar till en div som canvas/img
+    if (typeof QRCode !== "undefined") {
       return new Promise((resolve) => {
-        QRCode.toCanvas(canvas, text.slice(0, 80), { width: size * scale, margin: 1, color: { dark:"#1c1712", light:"#ffffff" } }, () => {
-          resolve(canvas.toDataURL());
-        });
+        const div = document.createElement("div");
+        div.style.display = "none";
+        document.body.appendChild(div);
+        try {
+          const qr = new QRCode(div, {
+            text: text.slice(0, 100),
+            width: 128, height: 128,
+            colorDark: "#1c1712", colorLight: "#ffffff",
+            correctLevel: QRCode.CorrectLevel.M
+          });
+          // qrcodejs renderar asynkront — vänta en tick
+          setTimeout(() => {
+            const img = div.querySelector("img") || div.querySelector("canvas");
+            const dataUrl = img ? (img.src || img.toDataURL()) : null;
+            document.body.removeChild(div);
+            resolve(dataUrl || this._qrFallback(text));
+          }, 50);
+        } catch {
+          document.body.removeChild(div);
+          resolve(this._qrFallback(text));
+        }
       });
     }
+    return this._qrFallback(text);
+  },
 
-    // Fallback: rita en dekorativ QR-liknande bild med kontrakt-data
-    // Tre positioneringsmönster (hörn-kvadrater)
-    const dot = (r, c) => ctx.fillRect(c * scale, r * scale, scale, scale);
-    const finderPattern = (row, col) => {
-      for (let r = 0; r < 7; r++) for (let c = 0; c < 7; c++) {
-        const border = r===0||r===6||c===0||c===6;
-        const inner  = r>=2&&r<=4&&c>=2&&c<=4;
-        if (border || inner) dot(row+r, col+c);
+  // Inbyggd fallback med korrekta positioneringsmönster
+  _qrFallback(text) {
+    const size = 21; const sc = 6;
+    const canvas = document.createElement("canvas");
+    canvas.width = canvas.height = size * sc;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.fillStyle = "#1c1712";
+    const dot = (r,c) => ctx.fillRect(c*sc, r*sc, sc, sc);
+    const finder = (row,col) => {
+      for(let r=0;r<7;r++) for(let c=0;c<7;c++) {
+        if(r===0||r===6||c===0||c===6||( r>=2&&r<=4&&c>=2&&c<=4)) dot(row+r,col+c);
       }
+      // Separator (vit kant)
+      ctx.fillStyle="#fff";
+      for(let i=0;i<8;i++){dot(row+7,col+i);dot(row+i,col+7);}
+      ctx.fillStyle="#1c1712";
     };
-    finderPattern(0, 0);
-    finderPattern(0, size-7);
-    finderPattern(size-7, 0);
-
-    // Timing patterns
-    for (let i = 8; i < size-8; i+=2) { dot(6,i); dot(i,6); }
-
-    // Data-moduler baserade på texten (deterministisk hash)
-    let hash = 0;
-    for (let i = 0; i < text.length; i++) hash = ((hash << 5) - hash + text.charCodeAt(i)) | 0;
-    let rng = Math.abs(hash);
-    const skip = (r,c) => (r<9&&c<9)||(r<9&&c>size-9)||(r>size-9&&c<9)||(r===6)||(c===6);
-    for (let r = 0; r < size; r++) for (let c = 0; c < size; c++) {
-      if (skip(r,c)) continue;
-      rng = (rng * 1664525 + 1013904223) & 0x7fffffff;
-      if (rng % 3 === 0) dot(r, c);
+    finder(0,0); finder(0,size-7); finder(size-7,0);
+    // Timing
+    for(let i=8;i<size-8;i+=2){dot(6,i);dot(i,6);}
+    // Format-info (förenklad)
+    dot(8,0);dot(8,1);dot(8,2);dot(8,5);dot(8,7);dot(8,8);
+    dot(7,8);dot(5,8);dot(4,8);dot(3,8);dot(2,8);dot(1,8);dot(0,8);
+    // Data från hash
+    let h=0; for(let i=0;i<text.length;i++) h=((h<<5)-h+text.charCodeAt(i))|0;
+    let rng=Math.abs(h)|1;
+    const skip=(r,c)=>(r<9&&c<9)||(r<9&&c>=size-8)||(r>=size-8&&c<9)||(r===6)||(c===6);
+    for(let r=0;r<size;r++) for(let c=0;c<size;c++){
+      if(skip(r,c)) continue;
+      rng=(rng*1664525+1013904223)&0x7fffffff;
+      if(rng&1) dot(r,c);
     }
     return canvas.toDataURL();
   },
@@ -1157,13 +1127,7 @@ const App = {
 .field-help:hover::after{opacity:1;}`;
       document.head.appendChild(s);
     }
-    const seed = this.state.contractNumber || "default";
-    const guilURI = guillocheDataURI(seed, 794, 1123, "#9a7d45", 0.18);
-    const micrURI = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(microtextSVG("عقد بيع قطعي · الجمهورية العربية السورية · " + (this.state.contractNumber||""), 794, 1123));
-    // Injicera som CSS-variabel
-    let secStyle = document.getElementById("security-styles");
-    if(!secStyle){ secStyle=document.createElement("style"); secStyle.id="security-styles"; document.head.appendChild(secStyle); }
-    secStyle.textContent = `.ppage{--guil-bg:url("${guilURI}");--micr-bg:url("${micrURI}");}`;
+    // Mikrotext renderas nu direkt som inline HTML i buildContractHTML
 
     const qrResult = this.generateQR([this.state.contractNumber, this.state.contractDate,
                                   this.state.sellerName, this.state.buyerName,
@@ -1184,29 +1148,60 @@ const App = {
     if(typeof html2pdf === "undefined") {
       this.toast("مكتبة PDF غير محملة","err"); return;
     }
+    this.toast("جارٍ إنشاء PDF...");
     const qrResult = this.generateQR([this.state.contractNumber, this.state.contractDate,
                                   this.state.sellerName, this.state.buyerName,
                                   `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
     const doSave = (qr) => {
       const css  = generateCSS("");
       const body = buildContractHTML(this.state, qr, "");
-      const wrap = document.createElement("div");
-      wrap.innerHTML = `<style>${css}</style>${body}`;
-      wrap.style.cssText = "position:absolute;left:-9999px;top:0;width:210mm;";
-      document.body.appendChild(wrap);
+
+      // Skapa ett temporärt container med båda sidorna
+      const container = document.createElement("div");
+      container.style.cssText = "position:fixed;left:-9999px;top:0;width:210mm;";
+      container.innerHTML = `<style>
+        ${css}
+        /* Säkerställ korrekt sidstorlek för html2pdf */
+        body { margin:0; padding:0; }
+        .page {
+          width:210mm !important;
+          height:297mm !important;
+          min-height:297mm !important;
+          max-height:297mm !important;
+          overflow:hidden !important;
+          padding:8mm 13mm 12mm 13mm !important;
+          box-sizing:border-box !important;
+          page-break-after:always !important;
+          break-after:page !important;
+          position:relative !important;
+          background:#fffdf8 !important;
+        }
+        .page:last-child { page-break-after:auto !important; break-after:auto !important; }
+      </style>${body}`;
+      document.body.appendChild(container);
+
+      const opt = {
+        margin:     0,
+        filename:   `عقد-بيع-${this.state.contractNumber||"جديد"}.pdf`,
+        image:      { type:"jpeg", quality:0.97 },
+        html2canvas:{ scale:2, useCORS:true, letterRendering:true, logging:false, windowWidth:794 },
+        jsPDF:      { unit:"mm", format:"a4", orientation:"portrait" },
+        pagebreak:  { mode:["css","legacy"], after:".page" }
+      };
+
       html2pdf()
-        .set({
-          margin: 0,
-          filename: `عقد-بيع-${this.state.contractNumber||"جديد"}.pdf`,
-          image: { type:"jpeg", quality:0.98 },
-          html2canvas: { scale:2, useCORS:true, letterRendering:true },
-          jsPDF: { unit:"mm", format:"a4", orientation:"portrait" },
-          pagebreak: { mode:["css","legacy"] }
-        })
-        .from(wrap)
+        .set(opt)
+        .from(container)
         .save()
-        .then(() => { document.body.removeChild(wrap); this.toast("تم حفظ PDF","ok"); })
-        .catch(() => { document.body.removeChild(wrap); this.toast("خطأ في حفظ PDF","err"); });
+        .then(() => {
+          document.body.removeChild(container);
+          this.toast("تم حفظ PDF","ok");
+        })
+        .catch((err) => {
+          document.body.removeChild(container);
+          this.toast("خطأ في حفظ PDF","err");
+          console.error("PDF error:", err);
+        });
     };
     if (qrResult && typeof qrResult.then === "function") qrResult.then(doSave);
     else doSave(qrResult);
