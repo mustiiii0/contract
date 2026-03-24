@@ -41,7 +41,6 @@ function numToArabicWords(n) {
   return parts.join(" و");
 }
 
-// Beräkna kontrakt-siffror ur state — en enda källa
 function calcState(state) {
   const total    = Number(num(state.priceTotal))  || 0;
   const deposit  = Number(num(state.deposit))     || 0;
@@ -54,20 +53,20 @@ function calcState(state) {
   return { total, deposit, area, remain, ppm, cur, depW, remW };
 }
 
-
-// Konverterar ISO-datum (2025-04-07) till arabiskt format (٧ أبريل ٢٠٢٥)
-function formatArabicDate(iso) {
+function formatArabicDate(iso, lang) {
   if (!iso) return "—";
   const d = new Date(iso + "T00:00:00");
   if (isNaN(d)) return iso;
+  if (lang === 'en') {
+    const months = ["January","February","March","April","May","June",
+                    "July","August","September","October","November","December"];
+    return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  }
   const months = ["يناير","فبراير","مارس","أبريل","مايو","يونيو",
                   "يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"];
-  const toAr = (n) => String(n).replace(/[0-9]/g, d => "٠١٢٣٤٥٦٧٨٩"[d]);
-  return `${toAr(d.getDate())} ${months[d.getMonth()]} ${toAr(d.getFullYear())}`;
+  return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
 }
 
-
-// Enkel deterministisk hash av kritiska dokumentfält (verifieringskod)
 function documentHash(state) {
   const fields = [
     state.contractNumber, state.contractDate, state.placeDate,
@@ -84,24 +83,148 @@ function documentHash(state) {
   return h.toString(16).toUpperCase().padStart(8,"0");
 }
 
-
-
-// Genererar mikrotext-HTML — fyra <div>-band, en per sida
-// Inlineat i dokumentet så att det renderas korrekt överallt
-
-// HTML-rad — används av både print och preview (olika CSS-prefix skickas in)
 const makeRow = (prefix) => (lbl, val) =>
   `<div class="${prefix}r"><span class="${prefix}l">${lbl}</span><span class="${prefix}v">${val}</span></div>`;
 
 
 // ============================================================
-//  DOKUMENT-HTML — en enda funktion, används av BÅDE print & preview
-//  prefix=""  → print-CSS (.r/.l/.v/.pg osv)
-//  prefix="p" → preview-CSS (.pr/.pl/.pv/.ppg osv)
+//  DOKUMENT-HTML
 // ============================================================
-function buildContractHTML(state, qrDataUrl, cssPrefix) {
-  const p   = cssPrefix;        // kort alias
-  const d   = state;
+
+// Konverterar latinska siffror till arabiska (١٩٧٥ istf 1975)
+function toArabicNums(str) {
+  if (str === null || str === undefined || str === "") return str || "";
+  return String(str).replace(/[0-9]/g, d => "٠١٢٣٤٥٦٧٨٩"[d]);
+}
+
+// Genererar vattenmärkes-badge för kopia-typ
+function copyBadgeHTML(copyType, p) {
+  const labels = { original:"النسخة الأصلية", buyer:"نسخة المشتري", seller:"نسخة البائع" };
+  const colors = { original:"#2c4a3e", buyer:"#9a7d45", seller:"#5a3a2e" };
+  const label = labels[copyType];
+  if (!label) return "";
+  const col = colors[copyType] || "#2c4a3e";
+  return `<div style="position:absolute;top:8mm;left:8mm;z-index:10;padding:3px 10px;font-family:'Amiri',serif;font-size:8pt;font-weight:700;color:#fff;background:${col};letter-spacing:.06em;direction:rtl;">${label}</div>`;
+}
+
+
+// English labels and clauses for document language switch
+const EN = {
+  page1of2:    "Page 1 of 2",
+  page2of2:    "Page 2 of 2",
+  republic:    "Syrian Arab Republic",
+  title:       "Absolute Sale Contract",
+  subtitle:    "For the absolute and binding transfer of real estate ownership",
+  parties:     "CONTRACTING PARTIES",
+  seller:      "First Party — Seller",
+  buyer:       "Second Party — Buyer",
+  name:        "Name",
+  son:         "Son of",
+  mother:      "Mother",
+  born:        "Born",
+  id:          "ID No.",
+  issued:      "Issued by",
+  date:        "Date",
+  phone:       "Phone",
+  email:       "Email",
+  property:    "PROPERTY DETAILS",
+  propNo:      "Property No.",
+  zone:        "Zone",
+  type:        "Type",
+  area:        "Area m²",
+  floor:       "Floor",
+  rooms:       "Rooms",
+  desc:        "Description",
+  bounds:      "Boundaries",
+  total:       "Total Sale Price",
+  deposit:     "Deposit Paid",
+  remaining:   "Remaining Balance",
+  financial:   "FINANCIAL & EXECUTION TERMS",
+  ppm:         "Price/m²",
+  payment:     "Payment Method",
+  delivery:    "Delivery Period",
+  signatures:  "SIGNATURES & WITNESSES",
+  party1:      "First Party — Seller",
+  party2:      "Second Party — Buyer",
+  witness1:    "First Witness",
+  witness2:    "Second Witness",
+  sigNote1:    "Signs before witnesses",
+  sigNote2:    "Signs after verification",
+  sigNote3:    "Attests signature",
+  stamp:       "Official Stamp",
+  draftedIn:   "Drafted in",
+  atDate:      "Dated",
+  attachments: "Attachments",
+  verify:      "Verify",
+  page2title:  "Absolute Sale Contract — Page Two",
+  legalClauses:"LEGAL CLAUSES",
+  preamble:    "Both parties, being fully legally competent, have agreed to the following:",
+  special:     "SPECIAL CONDITIONS",
+  verifyCode:  "Verification Code",
+  issuedOn:    "Issued on",
+};
+
+const AR = {
+  page1of2:    "صفحة 1 من 2",
+  page2of2:    "صفحة 2 من 2",
+  republic:    "الجُمهُورِيَّةُ العَرَبِيَّةُ السُّورِيَّةُ",
+  title:       "عقد بيع قطعي",
+  subtitle:    "خاص ببيع وانتقال ملكية عقار بصورة نهائية وملزمة",
+  parties:     "بيانات الأطراف المتعاقدة",
+  seller:      "الفريق الأول — البائع",
+  buyer:       "الفريق الثاني — المشتري",
+  name:        "الاسم",
+  son:         "ابن",
+  mother:      "والدته",
+  born:        "تولد",
+  id:          "هوية",
+  issued:      "صادرة عن",
+  date:        "بتاريخ",
+  phone:       "الهاتف",
+  email:       "البريد",
+  property:    "بيانات العقار المبيع",
+  propNo:      "رقم العقار",
+  zone:        "المنطقة",
+  type:        "نوع العقار",
+  area:        "المساحة م²",
+  floor:       "الطابق",
+  rooms:       "عدد الغرف",
+  desc:        "الوصف",
+  bounds:      "الحدود",
+  total:       "ثمن البيع الإجمالي",
+  deposit:     "العربون المدفوع",
+  remaining:   "الرصيد المتبقي",
+  financial:   "الشروط المالية والتنفيذية",
+  ppm:         "سعر المتر",
+  payment:     "طريقة الدفع",
+  delivery:    "مدة التسليم",
+  signatures:  "التواقيع والشهود",
+  party1:      "البائع — الفريق الأول",
+  party2:      "المشتري — الفريق الثاني",
+  witness1:    "الشاهد الأول",
+  witness2:    "الشاهد الثاني",
+  sigNote1:    "يوقع أمام الشهود",
+  sigNote2:    "يوقع بعد التحقق",
+  sigNote3:    "يشهد بصحة التوقيع",
+  stamp:       "محل الختم الرسمي",
+  draftedIn:   "تحريراً في",
+  atDate:      "بتاريخ",
+  attachments: "المرفقات",
+  verify:      "تحقق",
+  page2title:  "عقد بيع قطعي — الصفحة الثانية",
+  legalClauses:"البنود القانونية",
+  preamble:    "اتفق الفريقان وهما بكامل الأوصاف المطلوبة شرعاً وقانوناً على ما يلي:",
+  special:     "شروط خاصة",
+  verifyCode:  "كود التحقق",
+  issuedOn:    "صدر بتاريخ",
+};
+
+function buildContractHTML(state, qrDataUrl, cssPrefix, copyType, lang) {
+  const p     = cssPrefix;
+  const d     = state;
+  const _lang = lang || 'ar';
+  const L     = _lang === 'en' ? EN : AR;
+  const isEn  = _lang === 'en';
   const { total, deposit, remain, ppm, cur, depW, remW } = calcState(state);
   const row = makeRow(p);
 
@@ -111,133 +234,140 @@ function buildContractHTML(state, qrDataUrl, cssPrefix) {
   const sigW2 = sigHtml(state, "witness2");
 
   const page1 = `
-<div class="${p}page">
-<!-- Inre ram -->
+<div class="${p}page${isEn?' eng-doc':''}" dir="${isEn?'ltr':'rtl'}" style="direction:${isEn?'ltr':'rtl'}">
 <div class="${p}frame"></div>
-<!-- Sidnummer -->
-<div class="${p}pn">صفحة 1 من 2 · ${disp(d.contractNumber)}</div>
+${copyType ? copyBadgeHTML(copyType, p) : ""}
+<div class="${p}pn">${L.page1of2} · ${disp(d.contractNumber)}</div>
 
 <div class="${p}hd">
   <div class="${p}hdr">
     <div class="${p}emb"><img src="./Emblem.png" alt="" onerror="this.style.display='none'"></div>
-    <div class="${p}state">الجُمهُورِيَّةُ العَرَبِيَّةُ السُّورِيَّةُ</div>
+    <div class="${p}state">${L.republic}</div>
   </div>
   <div class="${p}div"></div>
   <div class="${p}hdl">
-    <div class="${p}hm">رقم العقد: <strong>${disp(d.contractNumber)}</strong></div>
-    <div class="${p}hm">مكان التحرير: <strong>${disp(d.placeDate)}</strong></div>
-    <div class="${p}hm">التاريخ: <strong>${disp(formatArabicDate(d.contractDate))}</strong></div>
+    <div class="${p}hm">${isEn?"Contract No.":"رقم العقد"}: <strong>${disp(d.contractNumber)}</strong></div>
+    <div class="${p}hm">${isEn?"Place":"مكان التحرير"}: <strong>${disp(d.placeDate)}</strong></div>
+    <div class="${p}hm">${isEn?"Date":"التاريخ"}: <strong>${disp(formatArabicDate(d.contractDate, _lang))}</strong></div>
   </div>
 </div>
 
 <div class="${p}tb">
   <div class="${p}orn"></div>
-  <div class="${p}mt">عقد بيع قطعي</div>
-  <div class="${p}st">خاص ببيع وانتقال ملكية عقار بصورة نهائية وملزمة</div>
+  <div class="${p}mt">${L.title}</div>
+  <div class="${p}st">${L.subtitle}</div>
 </div>
 
-<div class="${p}sl">بيانات الأطراف المتعاقدة</div>
+<div class="${p}sl">${L.parties}</div>
 <div class="${p}pg">
   <div class="${p}pp">
-    <div class="${p}pn2">الفريق الأول — البائع</div>
-    ${row("الاسم",disp(d.sellerName))}${row("ابن",disp(d.sellerFather))}${row("والدته",disp(d.sellerMother))}
-    ${row("تولد",disp(d.sellerBirth))}${row("هوية",disp(d.sellerID))}${row("صادرة عن",disp(d.sellerIDPlace))}
-    ${row("بتاريخ",disp(formatArabicDate(d.sellerIDDate)))}${d.sellerPhone?row("الهاتف",disp(d.sellerPhone)):""}${d.sellerEmail?row("البريد",disp(d.sellerEmail)):""}
+    <div class="${p}pn2">${L.seller}</div>
+    ${row(L.name,disp(d.sellerName))}${row(L.son,disp(d.sellerFather))}${row(L.mother,disp(d.sellerMother))}
+    ${row(L.born,disp(d.sellerBirth))}${row(L.id,disp(d.sellerID))}${row(L.issued,disp(d.sellerIDPlace))}
+    ${row(L.date,disp(formatArabicDate(d.sellerIDDate, _lang)))}${d.sellerPhone?row(L.phone,disp(d.sellerPhone)):""}${d.sellerEmail?row(L.email,disp(d.sellerEmail)):""}
   </div>
   <div class="${p}pp">
-    <div class="${p}pn2 ${p}b">الفريق الثاني — المشتري</div>
-    ${row("الاسم",disp(d.buyerName))}${row("ابن",disp(d.buyerFather))}${row("والدته",disp(d.buyerMother))}
-    ${row("تولد",disp(d.buyerBirth))}${row("هوية",disp(d.buyerID))}${row("صادرة عن",disp(d.buyerIDPlace))}
-    ${row("بتاريخ",disp(formatArabicDate(d.buyerIDDate)))}${d.buyerPhone?row("الهاتف",disp(d.buyerPhone)):""}${d.buyerEmail?row("البريد",disp(d.buyerEmail)):""}
+    <div class="${p}pn2 ${p}b">${L.buyer}</div>
+    ${row(L.name,disp(d.buyerName))}${row(L.son,disp(d.buyerFather))}${row(L.mother,disp(d.buyerMother))}
+    ${row(L.born,disp(d.buyerBirth))}${row(L.id,disp(d.buyerID))}${row(L.issued,disp(d.buyerIDPlace))}
+    ${row(L.date,disp(formatArabicDate(d.buyerIDDate, _lang)))}${d.buyerPhone?row(L.phone,disp(d.buyerPhone)):""}${d.buyerEmail?row(L.email,disp(d.buyerEmail)):""}
   </div>
 </div>
 
-<div class="${p}sl">بيانات العقار المبيع</div>
+<div class="${p}sl">${L.property}</div>
 <div class="${p}prop">
-  <div class="${p}pc">${row("رقم العقار",disp(d.propertyNumber))}</div>
-  <div class="${p}pc">${row("المنطقة",disp(d.propertyZone))}</div>
-  <div class="${p}pc">${row("نوع العقار",disp(d.propertyType))}</div>
-  <div class="${p}pc">${row("المساحة م²",disp(d.propertyArea))}</div>
-  <div class="${p}pc">${row("الطابق",disp(d.propertyFloor))}</div>
-  <div class="${p}pc ${p}nb">${row("عدد الغرف",disp(d.propertyRooms))}</div>
-  <div class="${p}pc ${p}full">${row("الوصف",disp(d.propertyDesc))}</div>
-  <div class="${p}pc ${p}full ${p}nb">${row("الحدود",disp(d.propertyBoundaries))}</div>
+  <div class="${p}pc">${row(L.propNo,disp(d.propertyNumber))}</div>
+  <div class="${p}pc">${row(L.zone,disp(d.propertyZone))}</div>
+  <div class="${p}pc">${row(L.type,disp(d.propertyType))}</div>
+  <div class="${p}pc">${row(L.area,disp(d.propertyArea))}</div>
+  <div class="${p}pc">${row(L.floor,disp(d.propertyFloor))}</div>
+  <div class="${p}pc ${p}nb">${row(L.rooms,disp(d.propertyRooms))}</div>
+  <div class="${p}pc ${p}full">${row(L.desc,disp(d.propertyDesc))}</div>
+  <div class="${p}pc ${p}full ${p}nb">${row(L.bounds,disp(d.propertyBoundaries))}</div>
 </div>
 
 <div class="${p}ps">
-  <div class="${p}psc"><span class="${p}psl">ثمن البيع الإجمالي</span><span class="${p}psv">${total?`${fmt(total)} ${cur}`:"—"}</span></div>
-  <div class="${p}psc"><span class="${p}psl">العربون المدفوع</span><span class="${p}psv">${deposit?`${fmt(deposit)} ${cur}`:"—"}</span></div>
-  <div class="${p}psc"><span class="${p}psl">الرصيد المتبقي</span><span class="${p}psv">${remain?`${fmt(remain)} ${cur}`:"—"}</span></div>
+  <div class="${p}psc"><span class="${p}psl">${L.total}</span><span class="${p}psv">${total?`${fmt(total)} ${cur}`:"—"}</span></div>
+  <div class="${p}psc"><span class="${p}psl">${L.deposit}</span><span class="${p}psv">${deposit?`${fmt(deposit)} ${cur}`:"—"}</span></div>
+  <div class="${p}psc"><span class="${p}psl">${L.remaining}</span><span class="${p}psv">${remain?`${fmt(remain)} ${cur}`:"—"}</span></div>
 </div>
 
-<div class="${p}sl">الشروط المالية والتنفيذية</div>
+<div class="${p}sl">${L.financial}</div>
 <div class="${p}fg">
-  <div class="${p}pc ${p}nb">${row("سعر المتر",ppm?`${fmt(ppm)} ${cur}`:"—")}</div>
-  <div class="${p}pc ${p}nb">${row("طريقة الدفع",disp(d.paymentMethod))}</div>
-  <div class="${p}pc ${p}nb">${row("مدة التسليم",disp(d.deliveryDeadline))}</div>
+  <div class="${p}pc ${p}nb">${row(L.ppm,ppm?`${fmt(ppm)} ${cur}`:"—")}</div>
+  <div class="${p}pc ${p}nb">${row(L.payment,disp(d.paymentMethod))}</div>
+  <div class="${p}pc ${p}nb">${row(L.delivery,disp(d.deliveryDeadline))}</div>
 </div>
 
-<div class="${p}sl">التواقيع والشهود</div>
+<div class="${p}sl">${L.signatures}</div>
 <div class="${p}sg">
-  <div class="${p}sb"><div class="${p}sbt">البائع — الفريق الأول</div>
-    <div class="${p}sr"><span class="${p}l">الاسم</span><span class="${p}v">${disp(d.sellerName)}</span></div>
-    <div class="${p}sl2">${sigS}</div><div class="${p}sc">يوقع أمام الشهود</div></div>
-  <div class="${p}sb"><div class="${p}sbt">المشتري — الفريق الثاني</div>
-    <div class="${p}sr"><span class="${p}l">الاسم</span><span class="${p}v">${disp(d.buyerName)}</span></div>
-    <div class="${p}sl2">${sigB}</div><div class="${p}sc">يوقع بعد التحقق</div></div>
-  <div class="${p}sb"><div class="${p}sbt">الشاهد الأول</div>
-    <div class="${p}sr"><span class="${p}l">الاسم</span><span class="${p}v">${disp(d.witness1)}</span></div>
-    <div class="${p}sl2">${sigW1}</div><div class="${p}sc">يشهد بصحة التوقيع</div></div>
-  <div class="${p}sb"><div class="${p}sbt">الشاهد الثاني</div>
-    <div class="${p}sr"><span class="${p}l">الاسم</span><span class="${p}v">${disp(d.witness2)}</span></div>
-    <div class="${p}sl2">${sigW2}</div><div class="${p}sc">يشهد بصحة التوقيع</div></div>
+  <div class="${p}sb"><div class="${p}sbt">${L.party1}</div>
+    <div class="${p}sr"><span class="${p}l">${L.name}</span><span class="${p}v">${disp(d.sellerName)}</span></div>
+    <div class="${p}sl2">${sigS}</div><div class="${p}sc">${L.sigNote1}</div></div>
+  <div class="${p}sb"><div class="${p}sbt">${L.party2}</div>
+    <div class="${p}sr"><span class="${p}l">${L.name}</span><span class="${p}v">${disp(d.buyerName)}</span></div>
+    <div class="${p}sl2">${sigB}</div><div class="${p}sc">${L.sigNote2}</div></div>
+  <div class="${p}sb"><div class="${p}sbt">${L.witness1}</div>
+    <div class="${p}sr"><span class="${p}l">${L.name}</span><span class="${p}v">${disp(d.witness1)}</span></div>
+    <div class="${p}sl2">${sigW1}</div><div class="${p}sc">${L.sigNote3}</div></div>
+  <div class="${p}sb"><div class="${p}sbt">${L.witness2}</div>
+    <div class="${p}sr"><span class="${p}l">${L.name}</span><span class="${p}v">${disp(d.witness2)}</span></div>
+    <div class="${p}sl2">${sigW2}</div><div class="${p}sc">${L.sigNote3}</div></div>
 </div>
 
 <div class="${p}bot">
-  <div class="${p}stmp"><div class="${p}stmpc">محل<br>الختم<br>الرسمي</div></div>
+  <div class="${p}stmp"><div class="${p}stmpc" style="white-space:pre-line">${isEn ? "Official\nStamp" : "محل\nالختم\nالرسمي"}</div></div>
   <div class="${p}fa">
-    <div class="${p}ff">${row("تحريراً في",disp(d.placeDate))}${row("بتاريخ",disp(formatArabicDate(d.contractDate)))}</div>
-    ${d.attachments?`<div class="${p}att"><strong>المرفقات:</strong> ${esc(d.attachments)}</div>`:""}
+    <div class="${p}ff">${row(L.draftedIn,disp(d.placeDate))}${row(L.atDate,disp(formatArabicDate(d.contractDate, _lang)))}</div>
+    ${d.attachments?`<div class="${p}att"><strong>${isEn?"Attachments":"المرفقات"}:</strong> ${esc(d.attachments)}</div>`:""}
   </div>
-  <!-- QR + hash في الركن الأيمن السفلي -->
   <div class="${p}qrbox">
     <img src="${qrDataUrl}" alt="QR" class="${p}qrimg">
-    <div class="${p}hash">تحقق: ${documentHash(d)}</div>
-    <div class="${p}genstamp">${new Date().toLocaleDateString("ar-SY")}</div>
+    <div class="${p}hash">${L.verify}: ${documentHash(d)}</div>
+    <div class="${p}genstamp">${isEn ? new Date().toLocaleDateString("en-GB") : new Date().toLocaleDateString("ar-SY")}</div>
   </div>
 </div>
 </div>`;
 
   const page2 = `
-<div class="${p}page">
+<div class="${p}page${isEn?' eng-doc':''}" dir="${isEn?'ltr':'rtl'}" style="direction:${isEn?'ltr':'rtl'}">
 <div class="${p}frame"></div>
-<div class="${p}pn">صفحة 2 من 2 · ${disp(d.contractNumber)}</div>
+${copyType ? copyBadgeHTML(copyType, p) : ""}
+<div class="${p}pn">${L.page2of2} · ${disp(d.contractNumber)}</div>
 
 <div class="${p}p2h">
-  <span>عقد بيع قطعي — الصفحة الثانية</span>
-  <span>${disp(formatArabicDate(d.contractDate))} · ${disp(d.placeDate)}</span>
+  <span>${L.page2title}</span>
+  <span>${disp(formatArabicDate(d.contractDate, _lang))} · ${disp(d.placeDate)}</span>
 </div>
 
-<div class="${p}sl">البنود القانونية</div>
-<p class="${p}ci">اتفق الفريقان وهما بكامل الأوصاف المطلوبة شرعاً وقانوناً على ما يلي:</p>
+<div class="${p}sl">${L.legalClauses}</div>
+<p class="${p}ci">${L.preamble}</p>
 
+${isEn ? `
+<div class="${p}cl"><span class="${p}cn">1</span><div>The First Party declares ownership of Property No. <strong>${disp(d.propertyNumber)}</strong> in the real estate zone of <strong>${disp(d.propertyZone)}</strong>, described as <strong>${disp(d.propertyType)}</strong> — ${disp(d.propertyDesc)}, with an area of <strong>${disp(d.propertyArea)} m²</strong>. The said property has been sold absolutely and irrevocably to the Second Party for a total of <strong>${total?`${fmt(total)} ${cur}`:"—"}</strong> at a unit price of <strong>${ppm?`${fmt(ppm)} ${cur}`:"—"}</strong> per m².</div></div>
+<div class="${p}cl"><span class="${p}cn">2</span><div>The First Party acknowledges receipt of a deposit of <strong>${deposit?`${fmt(deposit)} ${cur}`:"—"}</strong>. The remaining balance of <strong>${remain?`${fmt(remain)} ${cur}`:"—"}</strong> shall be paid upon completing the title transfer at the land registry by <strong>${disp(d.paymentMethod)}</strong>.</div></div>
+<div class="${p}cl"><span class="${p}cn">3</span><div>The First Party undertakes to deliver the property vacant of all occupants and in full condition within <strong>${disp(d.deliveryDeadline)}</strong> from the date of this contract. In case of delay, a daily penalty of <strong>${d.delayPenalty?`${fmt(d.delayPenalty)} ${cur}`:"—"}</strong> shall apply without the need for prior notice.</div></div>
+<div class="${p}cl"><span class="${p}cn">4</span><div>The Second Party confirms acceptance of this purchase as final and irrevocable. Should either party withdraw, the defaulting party shall pay the other <strong>${d.breachPenalty?`${fmt(d.breachPenalty)} ${cur}`:"—"}</strong> as compensation without the need for a court ruling.</div></div>
+<div class="${p}cl"><span class="${p}cn">5</span><div>The First Party declares that the property is free of all mortgages, liens, lawsuits and disputes as of the date of this contract. ${d.propertyMortgages?`Note: ${esc(d.propertyMortgages)}.`:""} All taxes and fees up to the date of title transfer shall be borne by the First Party.</div></div>
+<div class="${p}cl"><span class="${p}cn">6</span><div>This contract has been executed in three identical original copies signed by both parties in the presence of the undersigned witnesses, each party retaining one copy and the intermediary office the third. It shall be effective upon signing and stamping in accordance with applicable law.</div></div>
+` : `
 <div class="${p}cl"><span class="${p}cn">١</span><div>يُصرّح الفريق الأول بأنه يمتلك العقار رقم <strong>${disp(d.propertyNumber)}</strong> من المنطقة العقارية <strong>${disp(d.propertyZone)}</strong>، وهو عبارة عن <strong>${disp(d.propertyType)}</strong> — ${disp(d.propertyDesc)}، والبالغة مساحته <strong>${disp(d.propertyArea)} م²</strong>. وقد باع العقار المذكور بيعاً قطعياً لا نكول فيه إلى الفريق الثاني بمبلغ إجمالي قدره <strong>${total?`${fmt(total)} ${cur}`:"—"}</strong> وبسعر المتر المربع <strong>${ppm?`${fmt(ppm)} ${cur}`:"—"}</strong>.</div></div>
 <div class="${p}cl"><span class="${p}cn">٢</span><div>قبض الفريق الأول من الفريق الثاني عربوناً مقداره رقماً <strong>${deposit?`${fmt(deposit)} ${cur}`:"—"}</strong> كتابةً: <strong>${esc(depW)}</strong>. والرصيد البالغ <strong>${remain?`${fmt(remain)} ${cur}`:"—"}</strong> كتابةً: <strong>${esc(remW)}</strong> يُدفع عند إتمام إجراءات نقل الملكية في السجل العقاري بطريقة <strong>${disp(d.paymentMethod)}</strong>.</div></div>
 <div class="${p}cl"><span class="${p}cn">٣</span><div>يلتزم الفريق الأول بتسليم العقار خالياً من جميع الشواغل والمستأجرين وبكامل مرافقه خلال مدة أقصاها <strong>${disp(d.deliveryDeadline)}</strong> اعتباراً من تاريخ هذا العقد. وفي حال تأخره يدفع غرامة تأخير يومية قدرها <strong>${d.delayPenalty?`${fmt(d.delayPenalty)} ${cur}`:"—"}</strong> عن كل يوم تأخير دون الحاجة لإنذار أو إدعاء.</div></div>
 <div class="${p}cl"><span class="${p}cn">٤</span><div>يُصرّح الفريق الثاني بأنه قبل الشراء المذكور بشكل قطعي ونهائي وأسقط حقه من الرجوع أو النكول. وفي حال نكول أي من الفريقين يدفع الناكل للآخر كعطل وضرر مبلغ <strong>${d.breachPenalty?`${fmt(d.breachPenalty)} ${cur}`:"—"}</strong> دون الحاجة لإنذار أو قرار قضائي.</div></div>
 <div class="${p}cl"><span class="${p}cn">٥</span><div>يُقرّ الفريق الأول بأن العقار المذكور خالٍ من جميع الرهون والتكاليف والدعاوى القضائية والنزاعات حتى تاريخ هذا العقد. ${d.propertyMortgages?`ملاحظة: ${esc(d.propertyMortgages)}.`:""} وأن جميع الرسوم والضرائب المترتبة على العقار حتى تاريخ الفراغ في السجل العقاري تقع على عاتق الفريق الأول.</div></div>
 <div class="${p}cl"><span class="${p}cn">٦</span><div>نُظِّم هذا العقد على ثلاث نسخ أصلية متطابقة وقّعها الفريقان بحضور الشهود الموقعين ذيلاً، واحتفظ كل فريق بنسخة والمكتب الوسيط بالنسخة الثالثة. ويُعمل به بعد التوقيع والختم وفق الأصول القانونية النافذة.</div></div>
+`}
 
 ${(d.special1||d.special2||d.specialConditions)?`
-<div class="${p}sl" style="margin-top:3mm;">شروط خاصة</div>
-<div class="${p}spb">
+<div class="${p}sl" style="margin-top:3mm;">${L.special}</div>
+<div class="${p}spb" style="direction:${isEn?'ltr':'rtl'};text-align:${isEn?'left':'right'}">
   ${d.special1?`<p>— ${esc(d.special1)}</p>`:""}
   ${d.special2?`<p>— ${esc(d.special2)}</p>`:""}
   ${d.specialConditions?`<p>${esc(d.specialConditions)}</p>`:""}
 </div>`:""}
-<!-- QR + hash längst ner på sida 2 -->
 <div class="${p}p2footer">
-  <div class="${p}p2hash">كود التحقق: ${documentHash(d)} · صدر بتاريخ: ${disp(formatArabicDate(d.contractDate))}</div>
+  <div class="${p}p2hash">${L.verifyCode}: ${documentHash(d)} · ${L.issuedOn}: ${disp(formatArabicDate(d.contractDate, _lang))}</div>
   <img src="${qrDataUrl}" alt="QR" class="${p}qrimg2">
 </div>
 </div>`;
@@ -247,132 +377,31 @@ ${(d.special1||d.special2||d.specialConditions)?`
 
 
 // ============================================================
-//  PRINT MODULE — öppnar popup och skriver ut
+//  PRINT MODULE
 // ============================================================
 const PrintModule = {
   execute(state, generateQRFn) {
-    const qrResult = generateQRFn([state.contractNumber, state.contractDate, state.sellerName, state.buyerName,
+    const qr  = generateQRFn([state.contractNumber, state.contractDate, state.sellerName, state.buyerName,
                                `${fmt(Number(num(state.priceTotal))||0)} ${state.currency||"ل.س"}`].join(" | "));
-    const doOpen = (qr) => {
-      const css = this.printCSS();
-      const body = buildContractHTML(state, qr, "");
-      const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
+    const css = this.printCSS();
+    const body = buildContractHTML(state, qr, "", state._copyType || null, state._docLang || 'ar');
+    const html = `<!DOCTYPE html><html lang="ar" dir="rtl"><head><meta charset="UTF-8">
 <title>عقد بيع قطعي — ${esc(state.contractNumber)}</title>
 <link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
 <style>${css}</style></head><body>${body}</body></html>`;
-      const win = window.open("", "_blank", "width=900,height=700");
-      if (!win) { alert("Popup blockerades. Tillåt popups för denna sida."); return; }
-      win.document.open(); win.document.write(html); win.document.close();
-      win.onload = () => { win.focus(); win.print(); };
-    };
-    if (qrResult && typeof qrResult.then === "function") qrResult.then(doOpen);
-    else doOpen(qrResult);
+    const win = window.open("", "_blank", "width=900,height=700");
+    if (!win) { alert("Popup blockerades. Tillåt popups för denna sida."); return; }
+    win.document.open(); win.document.write(html); win.document.close();
+    win.onload = () => { win.focus(); win.print(); };
   },
-
-  printCSS() { return generateCSS(""); }
-
+  printCSS() {
+    // Returnerar tom sträng — CSS laddas via <link> i print-fönstret
+    return "";
+  }
 };
 
 
-// ============================================================
-//  GEMENSAM CSS-GENERATOR — en källa för print (prefix="") och preview (prefix="p")
-// ============================================================
-function generateCSS(p) {
-  const v = (name) => p ? `#${name}` : `var(--${name})`;
-  return `
-*,*::before,*::after{box-sizing:border-box;margin:0;padding:0;}
-:root{--ink:#1c1712;--mid:#5a5042;--faint:#c4baa8;--rule:#d8cebb;--accent:#2c4a3e;--gold:#9a7d45;--danger:#6e1f1f;--page:#fffdf8;}
-html,body{font-family:"Amiri","Traditional Arabic",serif;color:#1c1712;background:#fff;font-size:9pt;}
-.${p}page{width:210mm;min-height:297mm;padding:7mm 12mm 10mm 12mm;background:#fffdf8;position:relative;page-break-after:always;break-after:page;overflow:visible;box-sizing:border-box;}
-.${p}page:last-child{page-break-after:auto;break-after:auto;}
-.${p}frame{position:absolute;inset:5mm;border:1px solid #d8cebb;pointer-events:none;z-index:1;}
-.${p}pn{position:absolute;bottom:5mm;left:0;right:0;text-align:center;font-size:7.5pt;color:#5a5042;font-weight:700;letter-spacing:.05em;z-index:3;}
-/* Footer-QR block */
-.${p}bot{display:grid;grid-template-columns:68px 1fr auto;border:1px solid #d8cebb;margin-top:1.5mm;background:#fff;position:relative;z-index:2;}
-.${p}stmp{display:flex;align-items:center;justify-content:center;padding:5px;background:#fff;}
-.${p}stmpc{width:46px;height:46px;border-radius:50%;border:1.2px dashed #c4baa8;display:flex;align-items:center;justify-content:center;font-size:6pt;text-align:center;line-height:1.4;color:#c4baa8;}
-.${p}qrbox{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:3px 7px;border-right:1px solid #d8cebb;gap:2px;min-width:40px;}
-.${p}qrimg{width:26px;height:26px;display:block;image-rendering:pixelated;}
-.${p}hash{font-size:4.5pt;color:#9a7d45;letter-spacing:.04em;font-family:monospace;direction:ltr;text-align:center;}
-.${p}genstamp{font-size:4.5pt;color:#c4baa8;text-align:center;}
-/* Sida 2 footer */
-.${p}p2footer{display:flex;align-items:center;justify-content:space-between;margin-top:3mm;padding-top:2mm;border-top:1px solid #d8cebb;}
-.${p}p2hash{font-size:6pt;color:#9a7d45;font-family:monospace;direction:ltr;}
-.${p}qrimg2{width:22px;height:22px;display:block;opacity:.85;image-rendering:pixelated;}
-.${p}hd{display:grid;grid-template-columns:1fr 1px 1fr;align-items:center;margin-bottom:2mm;padding-bottom:2mm;border-bottom:1px solid #d8cebb;}
-.${p}hdr{display:flex;align-items:center;gap:8px;}
-.${p}emb{width:54px;height:54px;flex-shrink:0;}.${p}emb img{width:100%;height:auto;}
-.${p}state{font-size:15pt;font-weight:700;line-height:1.2;}
-.${p}div{width:1px;height:58px;background:#d8cebb;margin:0 12px;}
-.${p}hdl{display:flex;flex-direction:column;gap:2px;text-align:left;justify-self:end;}
-.${p}hm{font-size:9pt;font-weight:700;color:#3b3327;}.${p}hm strong{font-size:9.5pt;color:#1c1712;}
-.${p}tb{text-align:center;margin:1.5mm 0 2mm;}
-.${p}orn{height:1.5px;background:#9a7d45;margin-bottom:1.5mm;}
-.${p}mt{font-size:22pt;font-weight:700;}.${p}st{font-size:8.5pt;color:#5a5042;margin-top:.5mm;}
-.${p}sl{display:flex;align-items:center;gap:6px;font-size:7.5pt;font-weight:700;letter-spacing:.1em;color:#9a7d45;margin-bottom:1.5mm;margin-top:2mm;}
-.${p}sl::after{content:"";flex:1;height:1px;background:#d8cebb;}
-.${p}pg{display:grid;grid-template-columns:1fr 1fr;border:1.2px solid #d9ccb7;margin-bottom:2mm;background:#fff;}
-.${p}pp{padding:5px 10px;background:#fff;}.${p}pp+.${p}pp{border-right:1.2px solid #d9ccb7;}
-.${p}pn2{font-size:9.5pt;font-weight:700;color:#2c4a3e;border-bottom:1.2px solid #d4c6b0;padding-bottom:3px;margin-bottom:4px;}
-.${p}b{color:#9a7d45;}
-.${p}r{display:flex;align-items:center;gap:4px;margin-bottom:3px;}
-.${p}l{min-width:56px;font-size:8.5pt;font-weight:700;color:#5a5042;flex-shrink:0;}
-.${p}v{flex:1;font-size:9pt;border-bottom:1px solid #cfc1ab;padding:1px 3px 2px;text-align:center;}
-.${p}prop{display:grid;grid-template-columns:1fr 1fr;border:1.2px solid #d9ccb7;margin-bottom:2mm;}
-.${p}pc{padding:3px 8px;border-bottom:1.2px solid #d9ccb7;border-left:1.2px solid #d9ccb7;}
-.${p}pc:nth-child(odd){border-left:0;}.${p}full{grid-column:1/-1;border-left:0;}.${p}nb{border-bottom:0;}
-.${p}pc .${p}l{min-width:64px;}.${p}pc .${p}v{text-align:center;}
-.${p}ps{display:grid;grid-template-columns:2fr 1fr 1fr;background:#335545;color:#fff;margin-bottom:1.5mm;}
-.${p}psc{padding:3px 8px;border-left:1px solid rgba(255,255,255,.1);}.${p}psc:last-child{border-left:0;}
-.${p}psl{display:block;font-size:6pt;letter-spacing:.1em;color:rgba(255,255,255,.5);margin-bottom:1px;}
-.${p}psv{display:block;font-size:10.5pt;font-weight:700;direction:ltr;}
-.${p}psc:not(:first-child) .${p}psv{font-size:9pt;color:rgba(255,255,255,.85);}
-.${p}fg{display:grid;grid-template-columns:1fr 1fr 1fr;border:1.2px solid #d9ccb7;margin-bottom:2mm;}
-.${p}fg .${p}pc{border-left:1.2px solid #d9ccb7;}.${p}fg .${p}pc:first-child{border-left:0;}
-.${p}sg{display:grid;grid-template-columns:repeat(4,1fr);border:1.2px solid #d9ccb7;margin-bottom:2mm;}
-.${p}sb{padding:4px 6px;border-right:1.2px solid #d9ccb7;}.${p}sb:last-child{border-right:0;}
-.${p}sbt{font-size:8pt;font-weight:700;color:#2c4a3e;border-bottom:1.2px solid #d4c6b0;padding-bottom:3px;margin-bottom:4px;}
-.${p}sr{display:flex;align-items:center;gap:2px;margin-bottom:1px;}
-.${p}sr .${p}l{min-width:0;font-size:7.5pt;font-weight:700;}.${p}sr .${p}v{font-size:7.5pt;border-bottom:1px solid #cfc1ab;text-align:center;}
-.${p}sl2{display:flex;align-items:flex-end;height:19px;margin:3px 0;border-bottom:1px solid rgba(28,23,18,.12);}
-.${p}sl2 img{max-height:14px;margin:0 auto;}.${p}sc{font-size:7pt;color:#5a5042;text-align:center;}
-/* .bot/.stmp/.stmpc ingår i qr_css ovan */
-.${p}fa{padding:6px 12px;}.${p}ff{display:grid;grid-template-columns:1fr 1fr;gap:3px 10px;margin-bottom:3px;}
-.${p}att{font-size:7pt;color:#5a5042;}
-.${p}p2h{display:flex;justify-content:space-between;align-items:center;font-size:8pt;color:#5a5042;padding-bottom:3mm;margin-bottom:3mm;border-bottom:1px solid #d8cebb;}
-.${p}ci{font-size:9.5pt;font-style:italic;color:#5a5042;border-right:2px solid #d8cebb;padding-right:8px;margin-bottom:3mm;}
-.${p}cl{display:flex;gap:8px;font-size:9.5pt;line-height:1.85;text-align:justify;padding-bottom:3mm;margin-bottom:3mm;border-bottom:1px solid #d8cebb;}
-.${p}cl:last-of-type{border-bottom:0;}
-.${p}cn{min-width:16px;font-size:9pt;font-weight:700;color:#6e1f1f;flex-shrink:0;padding-top:2px;}
-.${p}spb{border:1px solid #d8cebb;padding:8px 12px;background:#fffdf8;font-size:9.5pt;line-height:1.75;margin-top:3mm;}
-.${p}spb p{margin-bottom:3px;}
-  ` + (p === "" ? `
-@page{size:A4;margin:0;}
-@media print{
-  *{-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important;}
-  html,body{margin:0;padding:0;background:#fff;}
-  .page{
-    width:210mm !important;
-    height:297mm !important;
-    min-height:unset !important;
-    padding:8mm 13mm 12mm 13mm !important;
-    box-sizing:border-box !important;
-    page-break-after:always !important;
-    break-after:page !important;
-    page-break-inside:avoid !important;
-    break-inside:avoid !important;
-    position:relative !important;
-    overflow:hidden !important;
-    box-shadow:none !important;
-    margin:0 !important;
-    background:#fffdf8 !important;
-  }
-  .page:last-child{page-break-after:auto !important;break-after:auto !important;}
-}
-@media screen{body{background:#d0c8b8;padding:16px;}.page{margin:0 auto 20px;box-shadow:0 4px 20px rgba(0,0,0,.2);}}` : `
-#doc-wrap{display:flex;flex-direction:column;align-items:center;gap:24px;padding:24px 0;background:#e8e2d8;}
-.${p}page{box-shadow:0 4px 20px rgba(0,0,0,.18);}`);
-}
+
 
 
 // ============================================================
@@ -380,7 +409,6 @@ html,body{font-family:"Amiri","Traditional Arabic",serif;color:#1c1712;backgroun
 // ============================================================
 const STORAGE_KEY    = "syrian-contract-system-v2";
 const CONTRACTS_KEY  = "syrian-contract-list-v1";
-const BACKUP_KEY     = "syrian-contract-backup-v2";
 const SIGNATURE_NAMES = ["seller", "buyer", "witness1", "witness2"];
 
 const REQUIRED_FIELDS = [
@@ -402,24 +430,19 @@ const ARABIC_LABELS = {
 };
 
 const DEFAULT_DATA = {
-  contractNumber:"RG-2025-001", fileNumber:"12/ع.ب/2025", placeDate:"دمشق", contractDate:"2025-04-07",
-  sellerName:"محمد أحمد حسن", sellerFather:"أحمد", sellerMother:"فاطمة خالد", sellerBirth:"1975",
-  sellerID:"123456789", sellerIDPlace:"دمشق", sellerIDDate:"1995-05-15", sellerPhone:"+963 11 123 4567", sellerEmail:"seller@example.com",
-  buyerName:"سامر خالد محمود", buyerFather:"خالد", buyerMother:"ناديا يوسف", buyerBirth:"1985",
-  buyerID:"987654321", buyerIDPlace:"حلب", buyerIDDate:"2005-08-22", buyerPhone:"+963 21 987 6543", buyerEmail:"buyer@example.com",
-  propertyNumber:"127", propertyZone:"المزة", propertyType:"شقة سكنية", propertyArea:"150",
-  propertyFloor:"الثالث", propertyRooms:"4", propertyRegistry:"أ/127/مزة", propertyView:"شارع رئيسي",
-  propertyDesc:"شقة سكنية في الطابق الثالث، تشطيب سوبر لوكس، مطبخ أمريكي",
-  propertyBoundaries:"الشرق: شارع عام عرضه 12م، الغرب: بناء آل الأحمد، الشمال: حديقة مشتركة، الجنوب: بناء رقم 15",
-  propertyMortgages:"خالٍ من أي رهن أو تكليف أو نزاع",
-  priceTotal:"75000000", currency:"ل.س", deposit:"15000000", paymentMethod:"نقداً",
-  deliveryDeadline:"60 يوماً", delayPenalty:"100000", breachPenalty:"10000000",
+  contractNumber:"", fileNumber:"", placeDate:"", contractDate:"",
+  sellerName:"", sellerFather:"", sellerMother:"", sellerBirth:"",
+  sellerID:"", sellerIDPlace:"", sellerIDDate:"", sellerPhone:"", sellerEmail:"",
+  buyerName:"", buyerFather:"", buyerMother:"", buyerBirth:"",
+  buyerID:"", buyerIDPlace:"", buyerIDDate:"", buyerPhone:"", buyerEmail:"",
+  propertyNumber:"", propertyZone:"", propertyType:"", propertyArea:"",
+  propertyFloor:"", propertyRooms:"", propertyRegistry:"", propertyView:"",
+  propertyDesc:"", propertyBoundaries:"", propertyMortgages:"",
+  priceTotal:"", currency:"ل.س", deposit:"", paymentMethod:"نقداً",
+  deliveryDeadline:"", delayPenalty:"", breachPenalty:"",
   depositWords:"", remainingWords:"",
-  witness1:"عمر عبد الله سالم", witness1ID:"112233", witness2:"ليلى محمد حسين", witness2ID:"445566",
-  special1:"يتم تسليم العقار خالياً من المستأجرين",
-  special2:"البائع ملزم بدفع جميع فواتير الكهرباء والمياه حتى تاريخ الفراغ",
-  specialConditions:"يُقرّ الفريق الأول بأن العقار خالٍ من أي دعاوى قضائية أو نزاعات ملكية.",
-  attachments:"صورة هوية البائع - صورة هوية المشتري - بيان قيد عقاري - رخصة البناء"
+  witness1:"", witness1ID:"", witness2:"", witness2ID:"",
+  special1:"", special2:"", specialConditions:"", attachments:""
 };
 
 const TEMPLATES = {
@@ -432,8 +455,9 @@ const TEMPLATES = {
 
 const App = {
   state: {},
-  _saveTimer: null, _backupTimer: null, _debounceTimer: null,
-  _sigPads: {}, _livePreviewOn: false,
+  _docLang: 'ar',
+  _saveTimer: null, _debounceTimer: null,
+  _sigPads: {},
   _dirty: false,
   _rates: { SYP:1, USD:1/13000, EUR:1/14200, TRY:1/390 },
   _undoStack: [], _redoStack: [],
@@ -449,7 +473,6 @@ const App = {
     this.updateProgress();
     this.initSigPads();
     this._saveTimer   = setInterval(() => { if(this._dirty) this.autoSave(); }, 1000);
-    this._backupTimer = setInterval(() => this.backup(), 30000);
     window.addEventListener("beforeunload", () => this.autoSave());
     this.fetchRates();
   },
@@ -457,14 +480,21 @@ const App = {
   loadData() {
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
-      return raw ? { ...DEFAULT_DATA, ...JSON.parse(raw) } : { ...DEFAULT_DATA };
-    } catch { return { ...DEFAULT_DATA }; }
+      if(!raw) return { ...DEFAULT_DATA };
+      const parsed = JSON.parse(raw);
+      // Sanity check - måste vara ett objekt
+      if(typeof parsed !== "object" || Array.isArray(parsed)) return { ...DEFAULT_DATA };
+      return { ...DEFAULT_DATA, ...parsed };
+    } catch {
+      // Rensa korrupt data
+      try { localStorage.removeItem(STORAGE_KEY); } catch {}
+      return { ...DEFAULT_DATA };
+    }
   },
 
   autoSave() {
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(this.state));
-      // Spara även per-kontrakt om _id finns
       if(this.state._id) {
         localStorage.setItem("contract-data-" + this.state._id, JSON.stringify(this.state));
         this.saveToHistory();
@@ -478,12 +508,6 @@ const App = {
     } catch {}
   },
 
-  backup() {
-    if (!this._dirty) return;
-    try { localStorage.setItem(BACKUP_KEY, JSON.stringify(this.state)); } catch {}
-  },
-
-  // ── Kontrakthistorik ──
   listContracts() {
     try { return JSON.parse(localStorage.getItem(CONTRACTS_KEY) || "[]"); } catch { return []; }
   },
@@ -492,52 +516,44 @@ const App = {
     const list = this.listContracts().filter(c => c.id !== this.state._id);
     const id = this.state._id || ("contract-" + Date.now());
     this.state._id = id;
-    const entry = {
-      id,
-      title: this.state.contractNumber || "عقد جديد",
-      seller: this.state.sellerName || "",
-      buyer:  this.state.buyerName  || "",
-      date:   this.state.contractDate || "",
-      saved:  new Date().toISOString()
-    };
+    const entry = { id, title: this.state.contractNumber || "عقد جديد", seller: this.state.sellerName || "", buyer: this.state.buyerName || "", date: this.state.contractDate || "", saved: new Date().toISOString() };
     list.unshift(entry);
     if(list.length > 20) list.length = 20;
     try { localStorage.setItem(CONTRACTS_KEY, JSON.stringify(list)); } catch {}
   },
 
   newContract() {
-    if(!confirm("إنشاء عقد جديد؟ سيتم حفظ العقد الحالي في السجل.")) return;
-    this.saveToHistory();
-    this.autoSave();
-    this.state = { ...DEFAULT_DATA, _id: "contract-" + Date.now() };
-    SIGNATURE_NAMES.forEach(n => delete this.state[`sig_${n}`]);
-    this.populateForm(); this.recalc(); this.clearSignatureCanvases();
-    this.renderPreview(); this.updateProgress();
-    document.getElementById("val-panel").classList.remove("show");
-    this.toast("تم إنشاء عقد جديد");
+    this._confirm("إنشاء عقد جديد؟ سيتم حفظ العقد الحالي في السجل.", () => {
+      this.saveToHistory();
+      this.autoSave();
+      this.state = { ...DEFAULT_DATA, _id: "contract-" + Date.now() };
+      SIGNATURE_NAMES.forEach(n => delete this.state[`sig_${n}`]);
+      this.populateForm(); this.recalc(); this.clearSignatureCanvases();
+      this.renderPreview(); this.updateProgress();
+      document.getElementById("val-panel").classList.remove("show");
+      this.toast("تم إنشاء عقد جديد");
+    });
   },
 
   loadContract(id) {
-    // البيانات الكاملة محفوظة في STORAGE_KEY المحدد لكل عقد
     try {
       const raw = localStorage.getItem("contract-data-" + id);
       if(!raw) { this.toast("لم يتم العثور على بيانات العقد","err"); return; }
-      this.autoSave(); // حفظ الحالي أولاً
+      this.autoSave();
       this.state = { ...DEFAULT_DATA, ...JSON.parse(raw) };
       this.populateForm(); this.recalc(); this.renderPreview();
       this.updateProgress(); this.initSigPads(true);
-      this.closeHistoryPanel();
-      this.toast("تم تحميل العقد");
+      this.closeHistoryPanel(); this.toast("تم تحميل العقد");
     } catch { this.toast("خطأ في تحميل العقد","err"); }
   },
 
   deleteContract(id) {
-    if(!confirm("حذف هذا العقد من السجل؟")) return;
-    const list = this.listContracts().filter(c => c.id !== id);
-    localStorage.setItem(CONTRACTS_KEY, JSON.stringify(list));
-    localStorage.removeItem("contract-data-" + id);
-    this.renderHistoryPanel();
-    this.toast("تم حذف العقد");
+    this._confirm("حذف هذا العقد من السجل؟", () => {
+      const list = this.listContracts().filter(c => c.id !== id);
+      localStorage.setItem(CONTRACTS_KEY, JSON.stringify(list));
+      localStorage.removeItem("contract-data-" + id);
+      this.renderHistoryPanel(); this.toast("تم حذف العقد");
+    });
   },
 
   openHistoryPanel() {
@@ -573,10 +589,7 @@ const App = {
     const list = this.listContracts();
     const el = document.getElementById("history-list");
     if(!el) return;
-    if(!list.length) {
-      el.innerHTML = `<div style="padding:24px;text-align:center;color:rgba(255,255,255,.3);font-size:13px;">لا توجد عقود محفوظة</div>`;
-      return;
-    }
+    if(!list.length) { el.innerHTML = `<div style="padding:24px;text-align:center;color:rgba(255,255,255,.3);font-size:13px;">لا توجد عقود محفوظة</div>`; return; }
     el.innerHTML = list.map(c => `
       <div style="display:flex;align-items:center;gap:10px;padding:10px 18px;border-bottom:1px solid rgba(255,255,255,.05);cursor:pointer;" data-load-id="${c.id}">
         <div style="flex:1;min-width:0;">
@@ -586,10 +599,7 @@ const App = {
         <button data-delete-id="${c.id}" style="background:none;border:1px solid rgba(255,0,0,.3);color:#c05050;font-size:10px;padding:3px 8px;cursor:pointer;border-radius:2px;">حذف</button>
       </div>`).join("");
     el.querySelectorAll("[data-load-id]").forEach(row => {
-      row.addEventListener("click", e => {
-        if(e.target.dataset.deleteId) return;
-        this.loadContract(row.dataset.loadId);
-      });
+      row.addEventListener("click", e => { if(e.target.dataset.deleteId) return; this.loadContract(row.dataset.loadId); });
     });
     el.querySelectorAll("[data-delete-id]").forEach(btn => {
       btn.addEventListener("click", e => { e.stopPropagation(); this.deleteContract(btn.dataset.deleteId); });
@@ -598,7 +608,7 @@ const App = {
 
   fetchRates() {
     const RATES_CACHE_KEY = "exchange-rates-cache-v1";
-    const TTL = 6 * 60 * 60 * 1000; // 6 timmar
+    const TTL = 6 * 60 * 60 * 1000;
     try {
       const cached = JSON.parse(localStorage.getItem(RATES_CACHE_KEY) || "null");
       if(cached && (Date.now() - cached.ts) < TTL) {
@@ -637,8 +647,7 @@ const App = {
           this.validateField(el.dataset.field);
           this.renderPreview();
           this.updateProgress();
-          this.renderLivePreview();
-        }, 280);
+            }, 280);
       });
     });
     document.querySelectorAll("[data-tab-link]").forEach((b) => b.addEventListener("click", () => this.switchTab(b.dataset.tabLink, b)));
@@ -649,10 +658,8 @@ const App = {
     document.getElementById("import-input").addEventListener("change", (e) => this.handleImport(e.target));
     document.getElementById("cur-syp-input").addEventListener("input", (e) => this.convertCurrency(e.target.value));
     ["cn-prefix","cn-year","cn-seq"].forEach((id) => document.getElementById(id).addEventListener("input", () => this.updateCNPreview()));
-
-    // Tangentbordsgenvägar
     document.addEventListener("keydown", (e) => {
-      if(e.target.tagName === "TEXTAREA") return; // hindra ej textfält
+      if(e.target.tagName === "TEXTAREA") return;
       const ctrl = e.ctrlKey || e.metaKey;
       if(ctrl && e.key === "z" && !e.shiftKey) { e.preventDefault(); this.undo(); }
       if(ctrl && (e.key === "y" || (e.key === "z" && e.shiftKey))) { e.preventDefault(); this.redo(); }
@@ -663,39 +670,34 @@ const App = {
 
   handleAction(action) {
     const actions = {
-      "toggle-live":            () => this.toggleLivePreview(),
-      "print":                  () => this.print(),
-      "export-json":            () => this.exportJSON(),
-      "import-json":            () => this.importJSON(),
-      "share-email":            () => this.shareEmail(),
-      "validate":               () => this.validate(),
-      "reset":                  () => this.resetToDefault(),
-      "apply-contract-number":  () => this.applyCN(),
-      "undo":                   () => this.undo(),
-      "redo":                   () => this.redo(),
-      "save-pdf":               () => this.savePDF(),
-      "open-history":           () => this.openHistoryPanel(),
-      "new-contract":           () => this.newContract(),
+      "print":                 () => this.print(),
+      "export-json":           () => this.exportJSON(),
+      "import-json":           () => this.importJSON(),
+      "share-email":           () => this.shareEmail(),
+      "validate":              () => this.validate(),
+      "reset":                 () => this.resetToDefault(),
+      "apply-contract-number": () => this.applyCN(),
+      "undo":                  () => this.undo(),
+      "redo":                  () => this.redo(),
+      "save-pdf":              () => this.savePDF(),
+      "export-html":           () => this.exportHTML(),
+      "toggle-lang":           () => this.toggleLang(),
+      "open-history":          () => this.openHistoryPanel(),
+      "new-contract":          () => this.newContract(),
     };
     actions[action]?.();
   },
 
   pushUndo() {
-    // Spara en kopia av state (utan interna _-nycklar och signaturer)
-    const snap = Object.fromEntries(
-      Object.entries(this.state).filter(([k]) => !k.startsWith("sig_"))
-    );
+    const snap = Object.fromEntries(Object.entries(this.state).filter(([k]) => !k.startsWith("sig_")));
     this._undoStack.push(JSON.stringify(snap));
     if(this._undoStack.length > this._UNDO_LIMIT) this._undoStack.shift();
-    this._redoStack = [];  // ny ändring raderar redo-historik
+    this._redoStack = [];
   },
 
   undo() {
     if(!this._undoStack.length) { this.toast("لا يوجد شيء للتراجع عنه","err"); return; }
-    // Spara nuläget i redo-stack
-    const snap = Object.fromEntries(
-      Object.entries(this.state).filter(([k]) => !k.startsWith("sig_"))
-    );
+    const snap = Object.fromEntries(Object.entries(this.state).filter(([k]) => !k.startsWith("sig_")));
     this._redoStack.push(JSON.stringify(snap));
     this.state = { ...this.state, ...JSON.parse(this._undoStack.pop()) };
     this.populateForm(); this.recalc(); this.renderPreview(); this.updateProgress();
@@ -704,9 +706,7 @@ const App = {
 
   redo() {
     if(!this._redoStack.length) { this.toast("لا يوجد شيء للإعادة","err"); return; }
-    const snap = Object.fromEntries(
-      Object.entries(this.state).filter(([k]) => !k.startsWith("sig_"))
-    );
+    const snap = Object.fromEntries(Object.entries(this.state).filter(([k]) => !k.startsWith("sig_")));
     this._undoStack.push(JSON.stringify(snap));
     this.state = { ...this.state, ...JSON.parse(this._redoStack.pop()) };
     this.populateForm(); this.recalc(); this.renderPreview(); this.updateProgress();
@@ -722,11 +722,8 @@ const App = {
 
   recalc() {
     const { total, deposit, remain, ppm, cur } = calcState(this.state);
-
     document.getElementById("f-remaining").value    = remain ? `${fmt(remain)} ${cur}` : "";
     document.getElementById("f-pricePerMeter").value = ppm   ? `${fmt(ppm)} ${cur}`   : "";
-
-    // Alltid räkna om arabisk text — rensa om värdet är 0
     this.state.depositWords  = deposit ? `${numToArabicWords(deposit)} ${cur}` : "";
     this.state.remainingWords = remain ? `${numToArabicWords(remain)} ${cur}` : "";
     document.getElementById("f-depositWords").value  = this.state.depositWords;
@@ -734,10 +731,7 @@ const App = {
   },
 
   updateProgress() {
-    const filled = REQUIRED_FIELDS.filter((f) => {
-      const el = document.getElementById(`f-${f}`);
-      return el && el.value.trim() !== "";
-    }).length;
+    const filled = REQUIRED_FIELDS.filter((f) => { const el = document.getElementById(`f-${f}`); return el && el.value.trim() !== ""; }).length;
     const pct = Math.round((filled / REQUIRED_FIELDS.length) * 100);
     document.getElementById("progress-fill").style.width = `${pct}%`;
     document.getElementById("progress-pct").textContent  = `${pct}%`;
@@ -775,10 +769,7 @@ const App = {
     const errors = [];
     const push = (f) => errors.push({ field:f, msg:document.getElementById(`e-${f}`)?.textContent||"قيمة غير صالحة" });
     REQUIRED_FIELDS.forEach((f) => { if(!this.validateField(f)) push(f); });
-    ["sellerEmail","buyerEmail","sellerPhone","buyerPhone","sellerIDDate","buyerIDDate"].forEach((f) => {
-      const el = document.getElementById(`f-${f}`);
-      if(el?.value && !this.validateField(f)) push(f);
-    });
+    ["sellerEmail","buyerEmail","sellerPhone","buyerPhone","sellerIDDate","buyerIDDate"].forEach((f) => { const el = document.getElementById(`f-${f}`); if(el?.value && !this.validateField(f)) push(f); });
     const {total,deposit} = calcState(this.state);
     if(deposit && total && deposit>total) { this.setError("deposit","يجب ألا يتجاوز العربون الثمن الإجمالي"); push("deposit"); }
     const sd=this.state.sellerIDDate?new Date(this.state.sellerIDDate):null;
@@ -829,13 +820,14 @@ const App = {
   },
 
   resetToDefault() {
-    if(!window.confirm("هل تريد مسح جميع البيانات وإعادة التعبئة بالبيانات التجريبية؟")) return;
-    this.state = { ...DEFAULT_DATA };
-    SIGNATURE_NAMES.forEach((n) => delete this.state[`sig_${n}`]);
-    this.populateForm(); this.recalc(); this.clearSignatureCanvases();
-    this.renderPreview(); this.updateProgress();
-    document.getElementById("val-panel").classList.remove("show");
-    this.toast("تم استعادة البيانات التجريبية");
+    this._confirm("هل تريد مسح جميع البيانات؟", () => {
+      this.state = { ...DEFAULT_DATA };
+      SIGNATURE_NAMES.forEach((n) => delete this.state[`sig_${n}`]);
+      this.populateForm(); this.recalc(); this.clearSignatureCanvases();
+      this.renderPreview(); this.updateProgress();
+      document.getElementById("val-panel").classList.remove("show");
+      this.toast("تم مسح جميع البيانات");
+    });
   },
 
   exportJSON() {
@@ -845,6 +837,50 @@ const App = {
     a.download = `عقد-بيع-${this.state.contractNumber||"جديد"}.json`;
     a.click(); URL.revokeObjectURL(a.href);
     this.toast("تم تصدير الملف");
+  },
+
+  exportHTML() {
+    const qr  = this.generateQR([this.state.contractNumber, this.state.contractDate,
+                                  this.state.sellerName, this.state.buyerName,
+                                  `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
+    const body = buildContractHTML(this.state, qr, "", null, this._docLang);
+    const dir = this._docLang === 'en' ? 'ltr' : 'rtl';
+
+    const html = `<!DOCTYPE html>
+<html lang="${this._docLang === 'en' ? 'en' : 'ar'}" dir="${dir}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>عقد بيع قطعي — ${esc(this.state.contractNumber || "جديد")}</title>
+<link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./doc.css">
+<style>
+body { background:#d0c8b8; padding:20px; margin:0; }
+.page { margin:0 auto 24px; box-shadow:0 4px 20px rgba(0,0,0,.2); }
+@media print {
+  body { background:#fff; padding:0; }
+  .page { box-shadow:none; margin:0; page-break-after:always; }
+}
+</style>
+</head>
+<body>
+<!-- عقد بيع قطعي — نسخة أرشيفية مستقلة -->
+<!-- تاريخ الإنشاء: ${new Date().toLocaleString("ar-SY")} -->
+<!-- كود التحقق: ${documentHash(this.state)} -->
+${body}
+<div style="text-align:center;padding:16px;font-size:9pt;color:#888;font-family:Arial,sans-serif;direction:ltr;">
+  Generated by نظام عقود البيع القطعي · ${new Date().toISOString().split("T")[0]} · Hash: ${documentHash(this.state)}
+</div>
+</body>
+</html>`;
+
+    const blob = new Blob([html], { type: "text/html;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `عقد-${this.state.contractNumber || "جديد"}-${this.state.contractDate || "بلاتاريخ"}.html`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    this.toast("تم حفظ ملف HTML","ok");
   },
 
   importJSON() { document.getElementById("import-input").click(); },
@@ -872,7 +908,7 @@ const App = {
 `عقد بيع قطعي
 ─────────────────────────────
 رقم العقد:  ${d.contractNumber}
-التاريخ:    ${formatArabicDate(d.contractDate)}
+التاريخ:    ${formatArabicDate(d.contractDate, _lang)}
 مكان التحرير: ${d.placeDate || "—"}
 
 الفريق الأول (البائع):  ${d.sellerName || "—"}
@@ -885,7 +921,6 @@ const App = {
 
 يرجى مراجعة العقد والتواصل لأي استفسار.`;
 
-    // إنشاء modal
     let modal = document.getElementById("email-modal");
     if(modal) modal.remove();
     modal = document.createElement("div");
@@ -900,9 +935,7 @@ const App = {
         <div style="padding:18px;display:flex;flex-direction:column;gap:12px;">
           <div>
             <label style="display:block;font-size:11px;font-weight:700;color:rgba(255,255,255,.5);margin-bottom:4px;">إلى (المستلم)</label>
-            <input id="email-to" type="email" value="${esc(d.buyerEmail || d.sellerEmail || "")}"
-              placeholder="example@email.com"
-              style="width:100%;padding:8px 10px;background:#1e1b16;border:1px solid rgba(255,255,255,.15);color:#f0e8d4;font-family:'Amiri',serif;font-size:13px;direction:ltr;">
+            <input id="email-to" type="email" value="${esc(d.buyerEmail || d.sellerEmail || "")}" placeholder="example@email.com" style="width:100%;padding:8px 10px;background:#1e1b16;border:1px solid rgba(255,255,255,.15);color:#f0e8d4;font-family:'Amiri',serif;font-size:13px;direction:ltr;">
             <div style="display:flex;gap:6px;margin-top:5px;">
               ${d.sellerEmail?`<button class="btn btn-ghost btn-xs email-preset" data-email="${esc(d.sellerEmail)}">${esc(d.sellerName||"البائع")}</button>`:""}
               ${d.buyerEmail?`<button class="btn btn-ghost btn-xs email-preset" data-email="${esc(d.buyerEmail)}">${esc(d.buyerName||"المشتري")}</button>`:""}
@@ -910,13 +943,11 @@ const App = {
           </div>
           <div>
             <label style="display:block;font-size:11px;font-weight:700;color:rgba(255,255,255,.5);margin-bottom:4px;">الموضوع</label>
-            <input id="email-subject" type="text" value="${esc(defaultSubject)}"
-              style="width:100%;padding:8px 10px;background:#1e1b16;border:1px solid rgba(255,255,255,.15);color:#f0e8d4;font-family:'Amiri',serif;font-size:13px;">
+            <input id="email-subject" type="text" value="${esc(defaultSubject)}" style="width:100%;padding:8px 10px;background:#1e1b16;border:1px solid rgba(255,255,255,.15);color:#f0e8d4;font-family:'Amiri',serif;font-size:13px;">
           </div>
           <div>
             <label style="display:block;font-size:11px;font-weight:700;color:rgba(255,255,255,.5);margin-bottom:4px;">نص الرسالة</label>
-            <textarea id="email-body" rows="10"
-              style="width:100%;padding:8px 10px;background:#1e1b16;border:1px solid rgba(255,255,255,.15);color:#f0e8d4;font-family:'Amiri',serif;font-size:12px;resize:vertical;">${esc(defaultBody)}</textarea>
+            <textarea id="email-body" rows="10" style="width:100%;padding:8px 10px;background:#1e1b16;border:1px solid rgba(255,255,255,.15);color:#f0e8d4;font-family:'Amiri',serif;font-size:12px;resize:vertical;">${esc(defaultBody)}</textarea>
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;padding-top:4px;">
             <button id="email-send" class="btn btn-gold">فتح في تطبيق البريد</button>
@@ -925,22 +956,16 @@ const App = {
         </div>
       </div>`;
     document.body.appendChild(modal);
-
     document.getElementById("email-close").onclick = () => modal.remove();
     modal.addEventListener("click", e => { if(e.target===modal) modal.remove(); });
-
-    modal.querySelectorAll(".email-preset").forEach(btn => {
-      btn.onclick = () => { document.getElementById("email-to").value = btn.dataset.email; };
-    });
-
+    modal.querySelectorAll(".email-preset").forEach(btn => { btn.onclick = () => { document.getElementById("email-to").value = btn.dataset.email; }; });
     document.getElementById("email-send").onclick = () => {
-      const to      = document.getElementById("email-to").value.trim();
+      const to = document.getElementById("email-to").value.trim();
       const subject = encodeURIComponent(document.getElementById("email-subject").value);
       const body    = encodeURIComponent(document.getElementById("email-body").value);
       window.open(`mailto:${encodeURIComponent(to)}?subject=${subject}&body=${body}`);
       modal.remove();
     };
-
     document.getElementById("email-copy").onclick = () => {
       navigator.clipboard?.writeText(document.getElementById("email-body").value)
         .then(() => this.toast("تم نسخ النص","ok"))
@@ -948,43 +973,28 @@ const App = {
     };
   },
 
-  toggleLivePreview() {
-    this._livePreviewOn = !this._livePreviewOn;
-    document.getElementById("live-preview-panel").hidden = !this._livePreviewOn;
-    document.getElementById("live-toggle-btn").classList.toggle("on", this._livePreviewOn);
-    document.getElementById("main-area").style.paddingRight = this._livePreviewOn ? "296px" : "";
-    if(this._livePreviewOn) this.renderLivePreview();
+  toggleLang() {
+    this._docLang = this._docLang === 'ar' ? 'en' : 'ar';
+    const btn = document.getElementById("lang-toggle-btn");
+    if(btn) btn.textContent = this._docLang === 'en' ? 'عربي' : 'English';
+    this.renderPreview();
+    this.toast(this._docLang === 'en' ? "Document language: English" : "لغة الوثيقة: العربية", "ok");
   },
 
-  renderLivePreview() {
-    if(!this._livePreviewOn) return;
-    const target = document.getElementById("live-doc-wrap");
-    const page   = document.querySelector("#doc-wrap .ppage");
-    if(!target || !page) return;
-    target.innerHTML = ""; target.appendChild(page.cloneNode(true));
-  },
+
 
   initSigPads(force=false) {
     SIGNATURE_NAMES.forEach((name) => {
       const canvas = document.getElementById(`sig-${name}`);
       if(!canvas) return;
-
-      // Om canvas ännu inte har en synlig bredd (formulärfliken dold vid init),
-      // registrera en ResizeObserver som kör om när canvas faktiskt visas.
       const rect = canvas.getBoundingClientRect();
       if(rect.width === 0 && !force) {
         const ro = new ResizeObserver((entries, observer) => {
-          if(entries[0].contentRect.width > 0) {
-            observer.disconnect();
-            this.initSigPads(true);
-          }
+          if(entries[0].contentRect.width > 0) { observer.disconnect(); this.initSigPads(true); }
         });
-        ro.observe(canvas);
-        return;
+        ro.observe(canvas); return;
       }
-
       if(this._sigPads[name] && !force) return;
-
       const ctx = canvas.getContext("2d");
       const dpr = window.devicePixelRatio || 1;
       canvas.width  = Math.max(1, Math.floor(rect.width  * dpr));
@@ -999,7 +1009,6 @@ const App = {
       canvas.onmousedown=start; canvas.onmousemove=move; canvas.onmouseup=end; canvas.onmouseleave=end;
       canvas.ontouchstart=start; canvas.ontouchmove=move; canvas.ontouchend=end;
       this._sigPads[name]={canvas,ctx};
-      // Återrit alltid sparad signatur (race-condition fix)
       this.redrawSignature(name);
     });
   },
@@ -1046,37 +1055,23 @@ const App = {
   },
 
   generateQR(text) {
-    // Använd QRCode-biblioteket om tillgängligt (qrcodejs via CDN)
-    // qrcodejs API: new QRCode(element, options) — renderar till en div som canvas/img
-    if (typeof QRCode !== "undefined") {
-      return new Promise((resolve) => {
-        const div = document.createElement("div");
-        div.style.display = "none";
-        document.body.appendChild(div);
-        try {
-          const qr = new QRCode(div, {
-            text: text.slice(0, 100),
-            width: 128, height: 128,
-            colorDark: "#1c1712", colorLight: "#ffffff",
-            correctLevel: QRCode.CorrectLevel.M
-          });
-          // qrcodejs renderar asynkront — vänta en tick
-          setTimeout(() => {
-            const img = div.querySelector("img") || div.querySelector("canvas");
-            const dataUrl = img ? (img.src || img.toDataURL()) : null;
-            document.body.removeChild(div);
-            resolve(dataUrl || this._qrFallback(text));
-          }, 50);
-        } catch {
-          document.body.removeChild(div);
-          resolve(this._qrFallback(text));
-        }
-      });
+    // Alltid synkront — returnerar aldrig Promise
+    // Försöker QRious om tillgängligt, annars inbyggd fallback
+    if (typeof QRious !== "undefined") {
+      try {
+        const qr = new QRious({
+          value: text.slice(0, 100),
+          size: 256,
+          foreground: "#1c1712",
+          background: "#ffffff",
+          level: "M"
+        });
+        return qr.toDataURL();
+      } catch(e) {}
     }
     return this._qrFallback(text);
   },
 
-  // Inbyggd fallback med korrekta positioneringsmönster
   _qrFallback(text) {
     const size = 21; const sc = 6;
     const canvas = document.createElement("canvas");
@@ -1087,20 +1082,14 @@ const App = {
     const dot = (r,c) => ctx.fillRect(c*sc, r*sc, sc, sc);
     const finder = (row,col) => {
       for(let r=0;r<7;r++) for(let c=0;c<7;c++) {
-        if(r===0||r===6||c===0||c===6||( r>=2&&r<=4&&c>=2&&c<=4)) dot(row+r,col+c);
+        if(r===0||r===6||c===0||c===6||(r>=2&&r<=4&&c>=2&&c<=4)) dot(row+r,col+c);
       }
-      // Separator (vit kant)
       ctx.fillStyle="#fff";
       for(let i=0;i<8;i++){dot(row+7,col+i);dot(row+i,col+7);}
       ctx.fillStyle="#1c1712";
     };
     finder(0,0); finder(0,size-7); finder(size-7,0);
-    // Timing
     for(let i=8;i<size-8;i+=2){dot(6,i);dot(i,6);}
-    // Format-info (förenklad)
-    dot(8,0);dot(8,1);dot(8,2);dot(8,5);dot(8,7);dot(8,8);
-    dot(7,8);dot(5,8);dot(4,8);dot(3,8);dot(2,8);dot(1,8);dot(0,8);
-    // Data från hash
     let h=0; for(let i=0;i<text.length;i++) h=((h<<5)-h+text.charCodeAt(i))|0;
     let rng=Math.abs(h)|1;
     const skip=(r,c)=>(r<9&&c<9)||(r<9&&c>=size-8)||(r>=size-8&&c<9)||(r===6)||(c===6);
@@ -1113,10 +1102,11 @@ const App = {
   },
 
   renderPreview() {
-    // Injicera preview-CSS en gång
-    if(!document.getElementById("preview-styles")){
-      const s=document.createElement("style"); s.id="preview-styles"; s.textContent=generateCSS("p");
-      document.head.appendChild(s);
+    // doc-preview.css laddas via <link> i contract.html — ingen dynamisk injektion
+    if(!document.getElementById("preview-styles-link")){
+      const lnk=document.createElement("link");
+      lnk.id="preview-styles-link"; lnk.rel="stylesheet"; lnk.href="./doc-preview.css";
+      document.head.appendChild(lnk);
     }
     if(!document.getElementById("tooltip-styles")){
       const s=document.createElement("style"); s.id="tooltip-styles";
@@ -1127,84 +1117,112 @@ const App = {
 .field-help:hover::after{opacity:1;}`;
       document.head.appendChild(s);
     }
-    // Mikrotext renderas nu direkt som inline HTML i buildContractHTML
-
-    const qrResult = this.generateQR([this.state.contractNumber, this.state.contractDate,
-                                  this.state.sellerName, this.state.buyerName,
-                                  `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
-    const render = (qr) => {
-      document.getElementById("doc-wrap").innerHTML = buildContractHTML(this.state, qr, "p");
-      this.renderLivePreview();
-    };
-    if (qrResult && typeof qrResult.then === "function") qrResult.then(render);
-    else render(qrResult);
+    try {
+      const qr = this.generateQR([this.state.contractNumber, this.state.contractDate,
+                                    this.state.sellerName, this.state.buyerName,
+                                    `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
+      const wrap = document.getElementById("doc-wrap");
+      if(!wrap) return;
+      wrap.innerHTML = buildContractHTML(this.state, qr, "p", null, this._docLang);
+    } catch(e) {
+      console.error("renderPreview fel:", e);
+      // Visa felet i doc-wrap så det syns i webbläsaren
+      const wrap = document.getElementById("doc-wrap");
+      if(wrap) wrap.innerHTML = `<div style="padding:20px;color:red;font-family:monospace;direction:ltr;">${e.message}<br>${e.stack||""}</div>`;
+    }
   },
 
   print() {
-    PrintModule.execute(this.state, (text) => this.generateQR(text));
+    // Öppna modal för att välja kopia-typ
+    this._showCopyModal((type) => {
+      const s = { ...this.state, _copyType: type };
+      PrintModule.execute(s, (text) => this.generateQR(text));
+    });
+  },
+
+  _showCopyModal(callback) {
+    let m = document.getElementById("copy-modal");
+    if(m) m.remove();
+    m = document.createElement("div");
+    m.id = "copy-modal";
+    m.style.cssText = "position:fixed;inset:0;z-index:700;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;";
+    m.innerHTML = `
+      <div style="background:var(--shell);border:1px solid rgba(255,255,255,.12);width:360px;font-family:'Amiri',serif;direction:rtl;overflow:hidden;">
+        <div style="padding:16px 20px;border-bottom:1px solid rgba(255,255,255,.08);font-size:14px;font-weight:700;color:#f0e8d4;">اختر نوع النسخة للطباعة</div>
+        <div style="padding:16px;display:flex;flex-direction:column;gap:10px;">
+          <button class="copy-choice" data-type="original" style="padding:12px 16px;background:#2c4a3e;color:#fff;border:none;font-family:'Amiri',serif;font-size:13px;font-weight:700;cursor:pointer;text-align:right;">النسخة الأصلية</button>
+          <button class="copy-choice" data-type="seller"   style="padding:12px 16px;background:#5a3a2e;color:#fff;border:none;font-family:'Amiri',serif;font-size:13px;font-weight:700;cursor:pointer;text-align:right;">نسخة البائع</button>
+          <button class="copy-choice" data-type="buyer"    style="padding:12px 16px;background:#9a7d45;color:#fff;border:none;font-family:'Amiri',serif;font-size:13px;font-weight:700;cursor:pointer;text-align:right;">نسخة المشتري</button>
+          <button class="copy-choice" data-type=""         style="padding:12px 16px;background:rgba(255,255,255,.06);color:#c8bfa8;border:1px solid rgba(255,255,255,.1);font-family:'Amiri',serif;font-size:13px;cursor:pointer;text-align:right;">بدون تمييز</button>
+        </div>
+        <div style="padding:0 16px 16px;"><button id="copy-cancel" style="width:100%;padding:8px;background:transparent;border:1px solid rgba(255,255,255,.1);color:rgba(255,255,255,.4);font-family:'Amiri',serif;font-size:12px;cursor:pointer;">إلغاء</button></div>
+      </div>`;
+    document.body.appendChild(m);
+    m.querySelectorAll(".copy-choice").forEach(btn => {
+      btn.onclick = () => { m.remove(); callback(btn.dataset.type || null); };
+    });
+    document.getElementById("copy-cancel").onclick = () => m.remove();
+    m.addEventListener("click", e => { if(e.target===m) m.remove(); });
   },
 
   savePDF() {
-    if(typeof html2pdf === "undefined") {
-      this.toast("مكتبة PDF غير محملة","err"); return;
-    }
-    this.toast("جارٍ إنشاء PDF...");
-    const qrResult = this.generateQR([this.state.contractNumber, this.state.contractDate,
-                                  this.state.sellerName, this.state.buyerName,
-                                  `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
-    const doSave = (qr) => {
-      const css  = generateCSS("");
-      const body = buildContractHTML(this.state, qr, "");
+    this._showCopyModal((type) => {
+      this._doSavePDF(type);
+    });
+  },
 
-      // Skapa ett temporärt container med båda sidorna
-      const container = document.createElement("div");
-      container.style.cssText = "position:fixed;left:-9999px;top:0;width:210mm;";
-      container.innerHTML = `<style>
-        ${css}
-        /* Säkerställ korrekt sidstorlek för html2pdf */
-        body { margin:0; padding:0; }
-        .page {
-          width:210mm !important;
-          height:297mm !important;
-          min-height:297mm !important;
-          max-height:297mm !important;
-          overflow:hidden !important;
-          padding:8mm 13mm 12mm 13mm !important;
-          box-sizing:border-box !important;
-          page-break-after:always !important;
-          break-after:page !important;
-          position:relative !important;
-          background:#fffdf8 !important;
-        }
-        .page:last-child { page-break-after:auto !important; break-after:auto !important; }
-      </style>${body}`;
-      document.body.appendChild(container);
+  _doSavePDF(copyType) {
+    // Använder print-popup med @page CSS — identisk med print()-metoden
+    // men med destination-title "Save as PDF" hint
+    const qr   = this.generateQR([this.state.contractNumber, this.state.contractDate,
+                                   this.state.sellerName, this.state.buyerName,
+                                   `${fmt(calcState(this.state).total)} ${this.state.currency||"ل.س"}`].join(" | "));
+    const body = buildContractHTML(this.state, qr, "", copyType || null, this._docLang);
+    const dir  = this._docLang === 'en' ? 'ltr' : 'rtl';
+    const filename = `عقد-بيع-${this.state.contractNumber||"جديد"}.pdf`;
 
-      const opt = {
-        margin:     0,
-        filename:   `عقد-بيع-${this.state.contractNumber||"جديد"}.pdf`,
-        image:      { type:"jpeg", quality:0.97 },
-        html2canvas:{ scale:2, useCORS:true, letterRendering:true, logging:false, windowWidth:794 },
-        jsPDF:      { unit:"mm", format:"a4", orientation:"portrait" },
-        pagebreak:  { mode:["css","legacy"], after:".page" }
-      };
+    const html = `<!DOCTYPE html><html lang="${this._docLang||'ar'}" dir="${dir}"><head>
+<meta charset="UTF-8">
+<title>${esc(filename)}</title>
+<link href="https://fonts.googleapis.com/css2?family=Amiri:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="./doc.css">
+</head><body>${body}</body></html>`;
 
-      html2pdf()
-        .set(opt)
-        .from(container)
-        .save()
-        .then(() => {
-          document.body.removeChild(container);
-          this.toast("تم حفظ PDF","ok");
-        })
-        .catch((err) => {
-          document.body.removeChild(container);
-          this.toast("خطأ في حفظ PDF","err");
-          console.error("PDF error:", err);
-        });
+    const win = window.open("", "_blank", "width=900,height=700");
+    if(!win){ this.toast("يرجى السماح بالنوافذ المنبثقة","err"); return; }
+    win.document.open();
+    win.document.write(html);
+    win.document.close();
+    // انتظر تحميل الخطوط ثم اطبع
+    win.onload = () => {
+      setTimeout(() => {
+        win.focus();
+        win.print();
+      }, 800);
     };
-    if (qrResult && typeof qrResult.then === "function") qrResult.then(doSave);
-    else doSave(qrResult);
+    this.toast("اختر 'حفظ بصيغة PDF' في نافذة الطباعة","ok");
+  },
+
+
+  // Generell bekräftelsedialog — ersätter window.confirm
+  _confirm(msg, onOk, onCancel) {
+    let m = document.getElementById("confirm-modal");
+    if(m) m.remove();
+    m = document.createElement("div");
+    m.id = "confirm-modal";
+    m.style.cssText = "position:fixed;inset:0;z-index:800;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;";
+    m.innerHTML = `
+      <div style="background:var(--shell);border:1px solid rgba(255,255,255,.12);width:380px;font-family:'Amiri',serif;direction:rtl;overflow:hidden;">
+        <div style="padding:20px 22px;font-size:13px;line-height:1.7;color:#e8e0d0;">${msg}</div>
+        <div style="display:flex;gap:8px;padding:0 22px 18px;justify-content:flex-end;">
+          <button id="confirm-ok"     style="padding:8px 20px;background:var(--danger);color:#fff;border:none;font-family:'Amiri',serif;font-size:13px;font-weight:700;cursor:pointer;">تأكيد</button>
+          <button id="confirm-cancel" style="padding:8px 20px;background:rgba(255,255,255,.08);color:#c8bfa8;border:1px solid rgba(255,255,255,.1);font-family:'Amiri',serif;font-size:13px;cursor:pointer;">إلغاء</button>
+        </div>
+      </div>`;
+    document.body.appendChild(m);
+    document.getElementById("confirm-ok").onclick     = () => { m.remove(); onOk?.(); };
+    document.getElementById("confirm-cancel").onclick = () => { m.remove(); onCancel?.(); };
+    m.addEventListener("click", e => { if(e.target===m){ m.remove(); onCancel?.(); } });
   },
 
   toast(msg, type="") {
