@@ -1102,7 +1102,7 @@ ${body}
   },
 
   renderPreview() {
-    // doc-preview.css laddas via <link> i contract.html — ingen dynamisk injektion
+    // doc-preview.css laddas via <link> i index.html — ingen dynamisk injektion
     if(!document.getElementById("preview-styles-link")){
       const lnk=document.createElement("link");
       lnk.id="preview-styles-link"; lnk.rel="stylesheet"; lnk.href="./doc-preview.css";
